@@ -1,0 +1,89 @@
+draft: false
+Name: GBA Link
+Description: Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then uses it as a controller/screen for the module
+Language: C++ (RP2040 Pico SDK) + C (GBA payload)
+Creator: Andy Jenkinson (uglifruit)
+Version: 0.1.0
+Status: Work in progress
+License: MIT
+Repository: https://github.com/TomWhitwell/Workshop_Computer/tree/main/releases/89_GBA
+
+tags:
+  - gba
+  - link cable
+  - multiboot
+  - controller
+  - screen
+  - experimental
+
+manual: |
+  GBA Link turns the Workshop Computer into a Game Boy Advance link-cable master. Wire a
+  bare GBA link socket to the pulse jacks (common ground):
+
+    Pulse Out 1 -> GBA SC   (serial clock)
+    Pulse Out 2 -> GBA SI   (serial in / MOSI)
+    Pulse In 1  -> GBA SO   (serial out / MISO)
+
+  Power on a GBA with no cartridge (or pick the multiboot/"download" option). The module
+  uploads a small program into the GBA over the link (BIOS Multiboot), then keeps a live
+  connection: the GBA becomes a controller + screen for the synth.
+
+  v0 smoke test: once booted, the GBA screen shows four bars and a tint driven by the
+  module's three knobs + CV In 1, and highlights the buttons you press. On the module,
+  D-pad Up/Down ramps CV Out 1, A/B set CV Out 2 high/low, and the L/R shoulder buttons
+  gate Audio Out 1/2. LED 0 lights when the link has booted; LED 1 while connecting.
+
+  This is an early, experimental applet — the payload is a minimal stub intended to grow
+  into a real on-screen UI.
+
+panel:
+  inputs:
+    - id: PulseIn1
+      name: GBA SO (MISO)
+      description: Serial data back from the GBA. Sampled directly (not via the 48kHz pulse path).
+    - id: Main
+      name: Param 1
+      description: Streamed to the GBA as a bar / background tint
+    - id: X
+      name: Param 2
+      description: Streamed to the GBA as a bar
+    - id: Y
+      name: Param 3
+      description: Streamed to the GBA as a bar
+    - id: CVIn1
+      name: Param 4
+      description: Streamed to the GBA as a bar
+  outputs:
+    - id: PulseOut1
+      name: GBA SC (clock)
+      description: Master serial clock driven by the RP2040 (PIO), inversion handled in hardware
+    - id: PulseOut2
+      name: GBA SI (MOSI)
+      description: Serial data to the GBA (payload + live parameters)
+    - id: CVOut1
+      name: D-pad CV
+      description: Ramps up/down while GBA Up/Down held
+    - id: CVOut2
+      name: A/B level
+      description: +high on A, -low on B, else 0
+    - id: AudioOut1
+      name: L gate
+      description: High while GBA L held
+    - id: AudioOut2
+      name: R gate
+      description: High while GBA R held
+
+controls:
+  leds:
+    - id: LED0
+      name: Link booted
+    - id: LED1
+      name: Connecting / error
+    - id: LED2
+      name: Button A
+    - id: LED3
+      name: Button B
+    - id: LED4
+      name: Button L
+    - id: LED5
+      name: Button R

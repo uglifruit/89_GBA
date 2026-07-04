@@ -1,0 +1,55 @@
+; gba_spi.pio — Full-duplex SPI master (mode 3) for GBA Multiboot on the Workshop Computer
+;
+; The GBA link cable in "normal"/SIO32 mode (used by Multiboot) is plain SPI:
+;   mode 3 (CPOL=1, CPHA=1), MSB-first, 32 bits per transfer, master supplies the clock.
+;   Data transitions on the leading (falling, since CPOL=1) edge and is captured on the
+;   trailing (rising) edge.
+;
+; This program is the CPHA=1 program from the Raspberry Pi pico-examples SPI example,
+; unchanged. CPOL and every Workshop hardware inversion are handled in the IO pad via
+; gpio_set_outover / gpio_set_inover in the C init (see gba_multiboot.cpp), NOT here — so
+; this stays a clean, canonical CPHA=1 SPI core.
+;
+; Pin routing on the Workshop Computer:
+;   SCK (GBA SC) -> Pulse Out 1 -> GPIO 8   (side-set)
+;   SI  (MOSI)   -> Pulse Out 2 -> GPIO 9   (OUT / MOV pins)
+;   SO  (MISO)   -> Pulse In 1  -> GPIO 2   (IN pins)
+;
+; Net pad inversion (worked out in C). Two independent inversions apply to SCK:
+;   * CPOL=1 wants SCK inverted (pico-examples technique), AND
+;   * the Workshop output stage already inverts Pulse Out 1.
+;   Two inversions cancel => SCK pad override = NORMAL.
+;   MOSI: Workshop inverts Pulse Out 2 once            => MOSI pad override = INVERT.
+;   MISO: Workshop inverts Pulse In 1 once             => MISO pad override = INVERT.
+;
+; One SPI bit = 3 PIO instructions; SCK period is set by the clock divider in C. Multiboot
+; is happy at low rates (reference uploaders use 50 kHz–1 MHz), which suits the slow,
+; transistor-conditioned Pulse In 1. Autopush/autopull (32-bit thresholds) are set in C.
+
+.program gba_spi
+.side_set 1
+
+; Clock phase = 1: data transitions on the leading edge of each SCK pulse, and is captured
+; on the trailing edge.
+    out x, 1    side 0     ; stall here on empty (keep SCK deasserted); load next TX bit
+    mov pins, x side 1 [1] ; drive MOSI (mov uses OUT mapping), assert SCK
+    in pins, 1  side 0     ; sample MISO, deassert SCK
+
+; C-side configuration (gba_multiboot.cpp):
+;   sm_config_set_out_pins(&c, GBA_MOSI_PIN, 1);      // GPIO 9
+;   sm_config_set_in_pins(&c, GBA_MISO_PIN);          // GPIO 2
+;   sm_config_set_sideset_pins(&c, GBA_SCK_PIN);      // GPIO 8
+;   sm_config_set_out_shift(&c, false, true, 32);     // MSB first, autopull, threshold 32
+;   sm_config_set_in_shift(&c, false, true, 32);      // MSB first, autopush, threshold 32
+;   sm_config_set_clkdiv(&c, div);                    // conservative
+;   // MOSI + SCK are outputs, MISO input:
+;   pio_sm_set_pins_with_mask(pio, sm, 0, (1u<<GBA_SCK_PIN)|(1u<<GBA_MOSI_PIN));
+;   pio_sm_set_pindirs_with_mask(pio, sm,
+;       (1u<<GBA_SCK_PIN)|(1u<<GBA_MOSI_PIN),
+;       (1u<<GBA_SCK_PIN)|(1u<<GBA_MOSI_PIN)|(1u<<GBA_MISO_PIN));
+;   pio_gpio_init(pio, GBA_SCK_PIN); pio_gpio_init(pio, GBA_MOSI_PIN); pio_gpio_init(pio, GBA_MISO_PIN);
+;   // Net inversions (see table above):
+;   gpio_set_outover(GBA_SCK_PIN,  GPIO_OVERRIDE_NORMAL);   // CPOL invert * HW invert cancel
+;   gpio_set_outover(GBA_MOSI_PIN, GPIO_OVERRIDE_INVERT);   // HW invert
+;   gpio_set_inover (GBA_MISO_PIN, GPIO_OVERRIDE_INVERT);   // HW invert
+;   pio_set_input_sync_bypass_with_mask(pio, 1u<<GBA_MISO_PIN, 1u<<GBA_MISO_PIN);
