@@ -13,8 +13,26 @@ would take a full re-investigation to rediscover.
   and is intended to be PR'd into `TomWhitwell/Workshop_Computer` under `releases/89_GBA/`
   later. Keep it self-contained (vendored `ComputerCard.h`, no external path deps) so that
   copy-in is clean.
-- `ComputerCard.h` is the **vendored Workshop HAL** (Chris Johnson's library). Don't edit it —
-  it travels with every applet. Treat it as read-only upstream.
+- `ComputerCard.h` is the **vendored Workshop HAL** (Chris Johnson's library, base v0.3.0),
+  copied per-applet. **This applet uses Andy's improved copy**, not stock — see below.
+
+## Andy's ComputerCard.h fixes (use this copy, don't regress to stock)
+
+The vendored HAL here is a **pure superset of upstream v0.3.0** (+18 lines, nothing removed),
+carrying two fixes Andy developed across his projects. The canonical copy lives in
+`91_Chorgan` / `95_OffAir` (byte-identical); `89_GBA` matches them. `96_Cathode` / `60_Markov`
+still carry **stock** v0.3.0 — do not copy their HAL over this one.
+
+1. **Power-on click removal.** Pre-fills the SPI DAC buffers with 0V "silence" words before
+   the first DMA transfer, so the first output is silence rather than uninitialised RAM.
+   Applies to any applet using audio/CV out (89_GBA does).
+2. **ADC channel-alignment fix.** Stops the ADC (`ADC_CS_START_MANY`) and drains the FIFO
+   before touching AINSEL, guaranteeing the DMA burst always restarts on channel 0. Without
+   it, an in-progress conversion lands as `ADC_Buffer[n][0]` and shifts the whole burst by
+   1–3 slots (knobs/CV read from the wrong channels). Applies to any applet reading ADC.
+
+When starting a **new** Workshop applet, seed `ComputerCard.h` from `95_OffAir`/`91_Chorgan`
+(or this repo), not from a stock-HAL project. These fixes are Andy's preferred baseline.
 
 ## Hardware facts you must not forget
 

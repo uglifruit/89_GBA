@@ -587,6 +587,15 @@ void __not_in_flash_func(ComputerCard::AudioWorker)()
 	// Set up DMA to transmit 2 samples to SPI
 	dma_channel_configure(spi_dma, &spi_dmacfg, &spi_get_hw(SPI_PORT)->dr, NULL, 2, false);
 
+	// Pre-fill SPI buffers with 0V DAC words so the first DMA transfer outputs
+	// silence rather than uninitialised RAM, eliminating the power-on click.
+	uint16_t silence_a = dacval(0, DAC_CHANNEL_A);
+	uint16_t silence_b = dacval(0, DAC_CHANNEL_B);
+	for (int i = 0; i < 2; i++) {
+		SPI_Buffer[i][0] = silence_a;
+		SPI_Buffer[i][1] = silence_b;
+	}
+
 	adc_run(true);
 
 	while (1)
@@ -643,6 +652,14 @@ void __not_in_flash_func(ComputerCard::BufferFull)()
 	static volatile int32_t cvsm[2] = { 0, 0 };
 	__attribute__((unused)) static int np = 0, np1 = 0, np2 = 0;
 
+	// Stop ADC before touching AINSEL — guarantees any in-progress conversion
+	// finishes and lands in the FIFO before we drain it, so DMA re-arm always
+	// starts on ch0 with an empty FIFO. adc_select_input() mid-conversion is
+	// not enough: the current conversion completes on the old channel first and
+	// that sample ends up as ADC_Buffer[n][0], shifting the burst by 1–3 slots.
+	hw_clear_bits(&adc_hw->cs, ADC_CS_START_MANY_BITS);
+	while (!(adc_hw->cs & ADC_CS_READY_BITS)) {} // wait for any in-progress conversion to complete
+	while (!adc_fifo_is_empty()) (void)adc_fifo_get();
 	adc_select_input(0);
 
 	// Advance external mux to next state
@@ -657,6 +674,7 @@ void __not_in_flash_func(ComputerCard::BufferFull)()
 	dma_hw->ints0 = 1u << adc_dma; // reset adc interrupt flag
 	dma_channel_set_write_addr(adc_dma, ADC_Buffer[dmaPhase], true); // start writing into new buffer
 	dma_channel_set_read_addr(spi_dma, SPI_Buffer[dmaPhase], true); // start reading from new buffer
+	hw_set_bits(&adc_hw->cs, ADC_CS_START_MANY_BITS);
 
 	////////////////////////////////////////
 	// Collect various inputs and put them in variables for the DSP
