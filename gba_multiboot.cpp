@@ -58,6 +58,12 @@ void gba_spi_init(uint32_t sck_hz)
     pio_gpio_init(pio, GBA_MOSI_PIN);
     pio_gpio_init(pio, GBA_MISO_PIN);
 
+    // CRITICAL: Pulse In 1 (GPIO 2) has a transistor input stage that is DEAD without an
+    // internal pull-up to bias it (ComputerCard.h: "Needs pullup to activate transistor on
+    // inputs"). pio_gpio_init() just reset the pad and dropped that pull-up, so re-enable it
+    // — otherwise the input reads a constant level and MISO is stuck (all-0s/all-1s).
+    gpio_pull_up(GBA_MISO_PIN);
+
     // Net pad inversions — see gba_spi.pio for the derivation:
     //   SCK : CPOL=1 invert cancels the Workshop output invert  -> NORMAL
     //   MOSI: Workshop output invert                            -> INVERT

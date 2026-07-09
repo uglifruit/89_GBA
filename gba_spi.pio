@@ -29,11 +29,19 @@
 .program gba_spi
 .side_set 1
 
-; Clock phase = 1: data transitions on the leading edge of each SCK pulse, and is captured
-; on the trailing edge.
+; Clock phase = 1 (CPHA=1): data transitions on the leading edge of each SCK pulse, and is
+; captured on the trailing edge.
     out x, 1    side 0     ; stall here on empty (keep SCK deasserted); load next TX bit
     mov pins, x side 1 [1] ; drive MOSI (mov uses OUT mapping), assert SCK
     in pins, 1  side 0     ; sample MISO, deassert SCK
+
+; Clock phase = 0 (CPHA=0): data is captured on the leading edge and transitions on the
+; trailing edge. Second program so diagnostics can sweep the sample edge (the axis a plain
+; polarity sweep can't reach). Same pin mapping/config.
+.program gba_spi_cpha0
+.side_set 1
+    out pins, 1 side 0 [1] ; drive MOSI, keep SCK deasserted (stall here on empty)
+    in pins, 1  side 1 [1] ; assert SCK and sample MISO on this (leading) edge
 
 ; C-side configuration (gba_multiboot.cpp):
 ;   sm_config_set_out_pins(&c, GBA_MOSI_PIN, 1);      // GPIO 9
