@@ -27,7 +27,9 @@ Checklist to clear before any firmware work:
    Do NOT put a resistor on SO (GBA drives that at 3.3 V into us — fine as-is).
 3. With power off, continuity-check the cable end you kept: GBA socket **pin 2→SO, pin 3→SI,
    pin 5→SC, pin 6→GND**. Beware the link-cable crossover (the two ends swap pins 2/3). Trust
-   the GBA-socket pin numbers, not wire colour.
+   the GBA-socket pin numbers, not wire colour. **See `CABLES.md`** for the per-cable-type
+   checklist — a GameCube→GBA cable (straight-through) avoids the crossover entirely and is
+   the preferred one.
 4. Re-measure SC/SI/SO with the probe running: all should sit within 0–3.3 V (SI/SC after
    their series resistors), none negative.
 
