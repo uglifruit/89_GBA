@@ -54,9 +54,52 @@ already clocking when it powers up. Power-cycle the *GBA* (not the Computer) to 
   low-16, so sending 0x00006202 returns 0x????6202. That echo is a loopback *through the GBA*
   and confirms bit timing independent of recognition (upper 16 = 0x7202).
 
+## UNRESOLVED: the applet and the diagnostics disagree about MISO polarity
+
+Not a style difference — one of them is wrong, and it is on the axis loopback cannot see
+(loopback only proves MOSI-invert XOR MISO-invert, so a matched pair of errors still passes):
+
+| | `gpio_set_inover(GBA_MISO_PIN, …)` |
+|---|---|
+| `gba_multiboot.cpp:73` (the applet) | `GPIO_OVERRIDE_INVERT` |
+| `gba_spi.pio` header derivation | `INVERT` — "Workshop inverts Pulse In 1 once" |
+| `diagnostics/bringup.cpp:179` | **`GPIO_OVERRIDE_NORMAL`** |
+| `diagnostics/gba_probe.cpp:97` | **`GPIO_OVERRIDE_NORMAL`** |
+
+The diagnostics were the ones returning structured bits from a real GBA, so `NORMAL` is the
+better-evidenced value — but that evidence was gathered over the bad cable, so it proves
+little. **Resolve this on the scope before trusting either**: with the GBA connected and
+idle, Pulse In 1's pad should read the GBA's actual SO line; compare the raw pad level
+against what the PIO samples. Whichever value wins, make all four sites agree — a silent
+disagreement here is exactly the shape of bug that survives a passing loopback.
+
 ## Diagnostics in this folder
 
-- `loopback.cpp`  → `gba_loopback.uf2` — transport self-test (no GBA).
+- `bringup.cpp`   → `bringup.uf2` — **start here.** The staged tool: switch UP = signal
+  generator (scope the raw output swing, GBA disconnected), MIDDLE = loopback, DOWN = live
+  GBA handshake. Its file header documents the LED meaning per stage. Written 2026-07-28,
+  builds clean, **never yet run on hardware**.
+- `loopback.cpp`  → `gba_loopback.uf2` — transport self-test (no GBA). Superseded by
+  `bringup` stage 2.
 - `gba_probe.cpp` → `gba_probe.uf2` — live GBA handshake probe; sweeps edge/polarity/clock,
   can report the raw reply as CV1/CV2 voltages. Rebuild: configure once, then
   `cmake --build build`.
+
+Build them all (paths as per the root `CLAUDE.md`):
+
+```sh
+cd diagnostics
+cmake -G Ninja -B build -S . && cmake --build build
+```
+
+## Next session: an oscilloscope is now available
+
+The blocker above was diagnosed with a multimeter, which cannot see edge quality, ringing or
+a clock that only misbehaves at speed. With a scope, `bringup` stage 1 becomes the real first
+test: it emits a slow anti-phase square on SC/SI plus a ~10 kHz burst so both the DC levels
+and the edges can be judged directly.
+
+A **browser diagnostic UI** (USB-MIDI SysEx + a `web/index.html`, as in `../WorkshopNibbleDrum`
+and `../WorkshopZX`) is the natural next tool once the electrical layer is sane — it would
+report the raw 32-bit reply word per attempt instead of encoding it into six LEDs, which is
+the current bottleneck when reading stage 3. Not started; no USB code exists in this repo yet.
