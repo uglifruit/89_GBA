@@ -43,9 +43,11 @@ continuous and clean. Notes from getting there:
 - Multiboot is **full duplex**: SO (pin 2) and SI (pin 3) are separate conductors, never
   multiplexed. Only multi-play and JOY-bus modes share a data line.
 
-## FIRST, before touching firmware — verify the electrical layer
+## Historical: the electrical fault that caused the pause (SUPERSEDED — now fixed)
 
-On the last attempt, a multimeter (reference = Computer GND) on the chopped cheap cable read:
+Kept for context only. These readings were taken over the **old chopped cheap cable** and are
+no longer the state of the bench; the readings in the table at the top of this file replace
+them. A multimeter (reference = Computer GND) then read:
 
 | Line | Measured | Should be | Verdict |
 |------|----------|-----------|---------|
@@ -56,7 +58,8 @@ On the last attempt, a multimeter (reference = Computer GND) on the chopped chea
 These are out of the GBA's 0–3.3 V spec (−2 V is actively bad). **Do not run the GBA connected
 until these are sane** — risk of damaging the console's serial pins.
 
-Checklist to clear before any firmware work:
+The build checklist that cleared it (items 1-3 are **done**; item 2 is still outstanding
+hardware work before a GBA is connected):
 
 1. **Common ground.** Measure DC from Computer-GND to GBA-GND (e.g. headphone-jack sleeve).
    It MUST read ~0 V. Anything else (esp. a volt or two) = grounds aren't common, and *every*
@@ -80,10 +83,11 @@ already clocking when it powers up. Power-cycle the *GBA* (not the Computer) to 
 
 ## Firmware state (all PROVEN, don't re-derive)
 
-- **Loopback passes** (jumper Pulse Out 2 → Pulse In 1, no GBA): flash `gba_loopback.uf2`,
-  switch DOWN = PIO mode → LED0 solid = transport OK. (Switch UP "raw GPIO" mode races the
-  ComputerCard HAL and gives false failures — ignore it; use PIO/DOWN.) Loopback blind spot:
-  it only checks MOSI-invert XOR MISO-invert, so it can't catch each line's polarity alone.
+- **Loopback passes** — re-proven on the scope 2026-09-03 with `bringup.uf2` stage 2
+  (switch MIDDLE, jumper Pulse Out 2 → Pulse In 1): 32 clean clock pulses per burst and LED0
+  solid = a bit-exact 32-bit round trip. Prefer `bringup` stage 2 over the older
+  `gba_loopback.uf2`. Loopback blind spot: it only checks MOSI-invert XOR MISO-invert, so it
+  cannot catch either line's polarity alone — that is what Reading B was for.
 - **Pull-up fix is in** `gba_multiboot.cpp`: after `pio_gpio_init` on the MISO pin, we
   re-`gpio_pull_up(GBA_MISO_PIN)` — the Pulse In 1 transistor input is dead without it.
 - **Sample edge:** the reference uploaders (tangrs, jojolebarjos) sample MISO on the
@@ -96,24 +100,22 @@ already clocking when it powers up. Power-cycle the *GBA* (not the Computer) to 
   low-16, so sending 0x00006202 returns 0x????6202. That echo is a loopback *through the GBA*
   and confirms bit timing independent of recognition (upper 16 = 0x7202).
 
-## UNRESOLVED: the applet and the diagnostics disagree about MISO polarity
+## RESOLVED: MISO polarity is NORMAL (scope-measured 2026-09-03)
 
-Not a style difference — one of them is wrong, and it is on the axis loopback cannot see
-(loopback only proves MOSI-invert XOR MISO-invert, so a matched pair of errors still passes):
+Was an open contradiction — the applet said `INVERT`, both diagnostics said `NORMAL`, and
+loopback structurally cannot tell them apart (it only proves MOSI-invert XOR MISO-invert, so
+a matched pair of errors passes).
 
-| | `gpio_set_inover(GBA_MISO_PIN, …)` |
-|---|---|
-| `gba_multiboot.cpp:73` (the applet) | `GPIO_OVERRIDE_INVERT` |
-| `gba_spi.pio` header derivation | `INVERT` — "Workshop inverts Pulse In 1 once" |
-| `diagnostics/bringup.cpp:179` | **`GPIO_OVERRIDE_NORMAL`** |
-| `diagnostics/gba_probe.cpp:97` | **`GPIO_OVERRIDE_NORMAL`** |
+**Settled by measurement, not derivation.** Patch cable Pulse Out 2 -> Pulse In 1, a scope
+probe on each end: both go high together, so the Workshop input stage does **not** invert.
 
-The diagnostics were the ones returning structured bits from a real GBA, so `NORMAL` is the
-better-evidenced value — but that evidence was gathered over the bad cable, so it proves
-little. **Resolve this on the scope before trusting either**: with the GBA connected and
-idle, Pulse In 1's pad should read the GBA's actual SO line; compare the raw pad level
-against what the PIO samples. Whichever value wins, make all four sites agree — a silent
-disagreement here is exactly the shape of bug that survives a passing loopback.
+The old derivation was wrong because it conflated ComputerCard's `PulseIn1()` returning
+`!gpio_get` — a *software* convention — with a *pad* inversion. It is not one. The applet's
+`INVERT` was a real bug that would have broken multiboot over any cable, and it also explains
+why the diagnostics were the only thing ever returning structured bits from a real GBA.
+
+All four sites now read the single constants in `../gba_spi.h` (`GBA_SCK_OUTOVER`,
+`GBA_MOSI_OUTOVER`, `GBA_MISO_INOVER`), so they cannot silently disagree again.
 
 ## Diagnostics in this folder
 
