@@ -18,53 +18,51 @@
 //   Knob X               = sample edge   (CCW = trailing/cpha1, CW = leading/cpha0)
 //   Knob Y               = SCK polarity  (CCW = normal, CW = inverted)
 //
-// LED LAYOUT (LEDs 0..5)
-//   In a TEST, LED5 is always the heartbeat. LEDs 0..4 mean what the test says below.
+// ═══ LED4 + LED5 ALWAYS SHOW WHICH TEST YOU ARE IN (binary) ══════════════════════════
+//     LED4  LED5   test
+//      off   off   0 — IDLE / WIRING
+//      off   ON    1 — LOOPBACK
+//      ON    off   2 — LIVE GBA
+//      ON    ON    3 — SWEEP
+//   No test borrows these two for data. If you are unsure where you are, read LED4/LED5.
+//   LEDs 0..3 carry the actual result.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────
-// TEST 0 — IDLE / WIRING  (safe with the GBA connected)
-//   Drives nothing. Just reports what the pins are doing at rest.
-//   LED0 = MISO pad reads HIGH right now. With the GBA connected and idle this should be
-//          SOLID (its SO line idles high, and our pull-up holds it there when disconnected).
-//          If it is DARK, SO is being held low — a short to GND, or a dead/absent cable.
-//   LED1 = MISO has CHANGED at least once since the test started (any activity at all).
-//   LED5 = heartbeat.
+// TEST 0 — IDLE / WIRING   (LED4 off, LED5 off)   safe with the GBA connected
+//   Drives nothing; just watches SO at rest.
+//   LED0 = SO reads HIGH right now.  GBA off -> should be SOLID (our pull-up holds it).
+//          DARK = SO held low: a short to GND or a broken SO conductor.
+//          BLINKING with the GBA on = the console is driving the line. Good.
+//   LED1 = SO has been seen both high and low (real activity).
 //
-// TEST 1 — TRANSPORT SELF-TEST  (jumper Pulse Out 2 -> Pulse In 1, GBA DISCONNECTED)
-//   Sends 0x00006202 through the loopback jumper and checks it comes back bit-exact.
-//   LED0 = exact match (GOOD).   LED1 = mismatch.
-//   LED2 = stuck (all 0s or all 1s — nothing is coming back).
-//   LED3 = bit-inverted reply (a polarity error).
-//   LED5 = heartbeat.
+// TEST 1 — LOOPBACK   (LED4 off, LED5 ON)   jumper Pulse Out 2 -> Pulse In 1, GBA UNPLUGGED
+//   Sends 0x00006202 through the jumper; expects it back bit-exact.
+//   LED0 = exact match (GOOD).  LED1 = mismatch.  LED2 = stuck.  LED3 = bit-inverted.
+//   With a GBA plugged in and no jumper this test FAILS by design — it is not testing the
+//   console. LED1+LED2 here is the expected "no jumper" pattern, not a fault.
 //
-// TEST 2 — LIVE GBA HANDSHAKE  (GBA connected, cartridge-less, on the logo screen)
-//   Sends 0x00006202 repeatedly at the knob-selected rate/edge/polarity.
-//   LED0 = ECHO: low-16 of the reply == 0x6202. THE KEY LIGHT — bit timing is correct.
+// TEST 2 — LIVE GBA   (LED4 ON, LED5 off)   GBA connected, cartridge-less, on the logo
+//   Sends 0x00006202 at the knob-selected rate/edge/polarity.
+//   LED0 = ECHO: low-16 of the reply == 0x6202.  THE KEY LIGHT — bit timing is right.
 //   LED1 = SYNC: high-16 == 0x7202. Full multiboot recognition. The goal.
-//   LED2 = the reply is STRUCTURED (not all-0s / all-1s) — i.e. the GBA is driving SO.
-//   LED3 = SO showed activity during the burst (sampled independently of the shift register).
-//   LED4 = brightness shows the CURRENT SCK polarity (dim = normal, bright = inverted).
-//   LED5 = heartbeat.
-//   NOTE: LED0/LED1/LED2 LATCH once seen, so a single good reply cannot be missed while you
-//         are looking away. A latched bit PULSES; a live-right-now bit is SOLID.
+//   LED2 = the reply looks like real data (several bit transitions — see looksLikeData()).
+//   LED3 = current SCK polarity: dim = normal, bright = inverted.
+//   LED0/1/2 LATCH once seen: SOLID = true right now, PULSING = seen earlier.
 //
-// TEST 3 — AUTO SWEEP  (GBA connected)
-//   Ignores the knobs and walks every combination of {edge} x {polarity} x {5 rates},
-//   ~0.7 s each, latching the best result found. Use this when you do not know where to
-//   start; then read the winning config out with the WORD READOUT.
-//   LED0 = ECHO seen at some point.  LED1 = SYNC seen.  LED2 = structured reply seen.
-//   LED3/LED4 = 2-bit binary of the sweep slot that produced the best result so far.
-//   LED5 = heartbeat (fast = sweeping).
+// TEST 3 — SWEEP   (LED4 ON, LED5 ON)   GBA connected
+//   Ignores the knobs; walks all 20 combinations of edge x polarity x 5 rates, ~0.7 s each
+//   (a full pass is ~14 s — let it run 30 s).
+//   LED0 = ECHO seen at some point.   LED1 = SYNC seen.
+//   LED2 = polarity of the best slot so far.   LED3 = edge of the best slot so far.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────
-// WORD READOUT (hold switch UP ~1s from any test)
-//   Displays the last 32-bit reply as 8 nibbles, most-significant first, one at a time:
-//     LED0..3 = the nibble in binary (LED0 = bit 0 ... LED3 = bit 3)
-//     LED4    = position marker: BRIGHT for nibbles 0-3 (high half), DIM for 4-7 (low half)
-//     LED5    = flashes once between nibbles to separate them
-//   Each nibble shows for ~1.2 s, then the whole word repeats. Click DOWN to leave.
-//   This is the readout the six-LED encoding was missing: you can transcribe the actual
-//   word the GBA sent back instead of inferring it from three flags.
+// WORD READOUT (hold switch UP ~1s from any test; click DOWN to leave)
+//   Clocks the last 32-bit reply out as 8 nibbles, most-significant first, ~1.2 s each:
+//     LED0..3 = the nibble in binary (LED0 = bit 0 ... LED3 = bit 3 / the 8s place)
+//     LED4    = BRIGHT for nibbles 1-4 (high half), DIM for nibbles 5-8 (low half)
+//     LED5    = blinks between nibbles to separate them
+//   Write down 8 hex digits. This is the only way to see WHAT the GBA replied rather than
+//   just that it replied something.
 //
 // Reminder: power the COMPUTER first, then the GBA (the master must already be clocking
 // when the console boots). Power-cycle the GBA, not the Computer, to retry.
@@ -228,6 +226,16 @@ private:
         return true;
     }
 
+    // A reply "looks like data" only if it has several 0<->1 transitions. The old test was
+    // just (r != 0 && r != ~0), which reported 0xFFFF0000 — a line sitting high then falling
+    // once, i.e. NOT being driven by the GBA at all — as a structured reply. That actively
+    // misled a bench session, so require real bit activity.
+    static bool looksLikeData(uint32_t r)
+    {
+        uint32_t edges = r ^ (r >> 1);
+        return __builtin_popcount(edges & 0x7FFFFFFFu) >= 3;
+    }
+
     // ── TEST 0: idle wiring check ────────────────────────────────────────────────────────
     void test0_idle()
     {
@@ -236,8 +244,7 @@ private:
         LedOn(0, hi);
         LedOn(1, misoSeenHigh_ && misoSeenLow_);
         LedOff(2); LedOff(3);
-        showTestId();
-        heartbeat(9);
+        showMode();
     }
 
     // ── TEST 1: loopback ─────────────────────────────────────────────────────────────────
@@ -254,8 +261,7 @@ private:
         LedOn(1, got != sent);
         LedOn(2, got == 0 || got == 0xFFFFFFFF);
         LedOn(3, got == ~sent);
-        showTestId();
-        heartbeat(9);
+        showMode();
     }
 
     // ── TEST 2: live GBA ─────────────────────────────────────────────────────────────────
@@ -271,7 +277,7 @@ private:
         }
         bool echo = ((r & 0xFFFF) == 0x6202);
         bool sync = ((r >> 16) == 0x7202);
-        bool structured = (r != 0 && r != 0xFFFFFFFF);
+        bool structured = looksLikeData(r);
         if (echo) echoLatch_ = true;
         if (sync) syncLatch_ = true;
         if (structured) structLatch_ = true;
@@ -285,9 +291,10 @@ private:
         latched(0, echo, echoLatch_);
         latched(1, sync, syncLatch_);
         latched(2, structured, structLatch_);
-        LedOn(3, misoSeenHigh_ && misoSeenLow_);
-        LedBrightness(4, sckInv_ ? 4095 : 250);
-        heartbeat(9);
+        // LED3 = current SCK polarity (dim normal / bright inverted). Moved off LED4, which
+        // is now the mode indicator.
+        LedBrightness(3, sckInv_ ? 4095 : 250);
+        showMode();
     }
 
     // ── TEST 3: auto sweep ───────────────────────────────────────────────────────────────
@@ -314,7 +321,7 @@ private:
         } else {
             bool echo = ((r & 0xFFFF) == 0x6202);
             bool sync = ((r >> 16) == 0x7202);
-            bool structured = (r != 0 && r != 0xFFFFFFFF);
+            bool structured = looksLikeData(r);
             if (echo) echoLatch_ = true;
             if (sync) syncLatch_ = true;
             if (structured) structLatch_ = true;
@@ -324,11 +331,11 @@ private:
 
         latched(0, false, echoLatch_);
         latched(1, false, syncLatch_);
-        latched(2, false, structLatch_);
-        // Which slot won, as 2 bits — enough to say "leading vs trailing" and "inv vs normal".
-        LedOn(3, (bestSlot_ / 5)  & 1);
-        LedOn(4, (bestSlot_ / 10) & 1);
-        heartbeat(7);
+        // Which slot won, as 2 bits: LED2 = polarity, LED3 = edge. (Was LED3/LED4; LED4 is
+        // the mode indicator now.)
+        LedOn(2, (bestSlot_ / 5)  & 1);
+        LedOn(3, (bestSlot_ / 10) & 1);
+        showMode();
     }
 
     // ── WORD READOUT ─────────────────────────────────────────────────────────────────────
@@ -339,8 +346,8 @@ private:
         bool gap = (roTick_ > 50000);
         uint32_t nib = (lastWord_ >> (28 - 4 * roIdx_)) & 0xF;
         for (int i = 0; i < 4; i++) LedOn(i, !gap && ((nib >> i) & 1));
-        LedBrightness(4, (roIdx_ < 4) ? 4095 : 250);
-        LedOn(5, gap);
+        LedBrightness(4, (roIdx_ < 4) ? 4095 : 250);   // bright = high half, dim = low half
+        LedOn(5, gap);                                  // blinks between nibbles
     }
 
     // ── LED helpers ──────────────────────────────────────────────────────────────────────
@@ -351,10 +358,21 @@ private:
         else            LedOff(led);
     }
 
-    // Test 0 and 1 have LED4 free, so use it to show which test you are in.
-    void showTestId() { LedBrightness(4, test_ == 0 ? 200 : 1500); }
-
-    void heartbeat(uint32_t shift) { LedOn(5, (tick_ >> shift) & 1); }
+    // LED4+LED5 are ALWAYS the test number in binary (LED4 = bit1, LED5 = bit0), in every
+    // test and in the readout. Being lost about which mode you are in wasted real bench time,
+    // so no test is allowed to borrow these two for data any more.
+    //   LED4 LED5   test
+    //    off  off   0  idle/wiring
+    //    off  ON     1  loopback
+    //    ON   off   2  live GBA
+    //    ON   ON    3  sweep
+    // In the WORD READOUT both are driven differently (see runReadout) — that is the one
+    // place they mean something else, and the readout is unmistakable anyway.
+    void showMode()
+    {
+        LedOn(4, (test_ >> 1) & 1);
+        LedOn(5, test_ & 1);
+    }
 
     void retuneIfKnobsMoved()
     {
