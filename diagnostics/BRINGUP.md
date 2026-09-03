@@ -1,7 +1,47 @@
 # Hardware bring-up notes (89_GBA)
 
-Status: **PAUSED** waiting on a better link cable. The firmware transport is proven good; the
-blocker is electrical (bad cheap crossover cable / ground). Pick up here.
+Status: **ELECTRICAL LAYER CLEAR — ready for the live GBA handshake (stage 3).**
+Readings A, B and C all passed on 2026-09-03; a working cable is built. The only untested
+element left in the chain is the GBA itself. Pick up at "Reading D" below.
+
+### Bench session 2026-09-03 — what was proven
+
+| Check | Result |
+|---|---|
+| A — output swing (stage 1, scope) | 0 V low, **6 V high**, anti-phase, sharp edges. The old −2 V is gone. |
+| B — MISO pad polarity (patch cable, 2 probes) | Both ends go high together => input stage does **NOT** invert => `NORMAL`. |
+| C — loopback transport (stage 2, scope) | **32 clean clock pulses**, LED0 **solid** = bit-exact 32-bit word. |
+
+Three bugs were found and fixed as a result (commit `08fb83f`):
+
+1. **MISO polarity was wrong in the applet** (`INVERT`, should be `NORMAL`). Would have
+   broken multiboot over any cable. All overrides now live as single constants in
+   `../gba_spi.h` so the four init sites cannot disagree again.
+2. **clkdiv divided by 3, but both PIO programs are 4 cycles/bit** — every rate ran 4/3 fast.
+3. **The diagnostics called put/get_blocking from `ProcessSample`** (48 kHz, 20.8 µs budget)
+   while a word takes ~854 µs. That stalled the audio callback for ~41 sample periods and
+   left the SM half-fed — the exact cause of the "SC idles high, only 2–3 clock pulses"
+   symptom. Now a non-blocking `post()`/`poll()` pair. The applet was never affected: it
+   runs the link on core 1, where blocking is correct.
+
+**Note on the SC idle level:** SC resting HIGH at 6 V between bursts is *correct*, not a
+fault. The SM stalls on `side 0` (pad low) and Pulse Out 1 inverts in hardware. Don't chase
+it again.
+
+### The cable that worked
+
+A point-to-point GBA link cable into a bought GBA link socket, with **SI, SO, SC and GND**
+continuous and clean. Notes from getting there:
+
+- A **multi-play cable with a mid-cable breakout** was tried and rejected — it read as an
+  SI–GND short. Multi-play wiring is not normal/SIO32 wiring; avoid breakout cables.
+- **SD (pin 4) is never needed.** Normal/SIO32 mode ignores it. Needing only SO/SI/SC/GND is
+  the signature of the right cable; an "SD is connected" reading suggests a multi-play cable.
+- **Pin 1 (VCC 3.3 V) is an output the GBA sources.** Leave it isolated.
+- Ground may ride the **shield/braid** rather than a discrete core — a three-cores-plus-shield
+  cable is normal and fine. Buzz pin 6 to the braid and the shell, not just the conductors.
+- Multiboot is **full duplex**: SO (pin 2) and SI (pin 3) are separate conductors, never
+  multiplexed. Only multi-play and JOY-bus modes share a data line.
 
 ## FIRST, before touching firmware — verify the electrical layer
 
@@ -79,8 +119,8 @@ disagreement here is exactly the shape of bug that survives a passing loopback.
 
 - `bringup.cpp`   → `bringup.uf2` — **start here.** The staged tool: switch UP = signal
   generator (scope the raw output swing, GBA disconnected), MIDDLE = loopback, DOWN = live
-  GBA handshake. Its file header documents the LED meaning per stage. Written 2026-07-28,
-  builds clean, **never yet run on hardware**.
+  GBA handshake. Its file header documents the LED meaning per stage. **Stages 1 and 2 are
+  now hardware-proven** (2026-09-03); stage 3 has not yet been run against a real GBA.
 - `loopback.cpp`  → `gba_loopback.uf2` — transport self-test (no GBA). Superseded by
   `bringup` stage 2.
 - `gba_probe.cpp` → `gba_probe.uf2` — live GBA handshake probe; sweeps edge/polarity/clock,
