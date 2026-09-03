@@ -38,19 +38,24 @@ public:
 
     void __not_in_flash_func(ProcessSample)() override
     {
-        if (++tick_ < 200) return;
-        tick_ = 0;
-        beat_ = !beat_;
-
-        // slow SCK-polarity toggle so both polarities get tried (~3s each)
-        if (++polTick_ >= 720) { polTick_ = 0; sckInv_ ^= 1; applySck(); }
-
-        uint32_t hz = (SwitchVal() == Switch::Up)     ? 25'000u
-                    : (SwitchVal() == Switch::Middle) ?  5'000u
-                                                       :  1'000u;
-        pio_sm_set_clkdiv(GBA_PIO, GBA_SM, (float)clock_get_hz(clk_sys) / (3.0f * hz));
-
-        uint32_t r  = xfer();
+        // NON-BLOCKING: see the note in bringup.cpp. At the 1 kHz setting a 32-bit word takes
+        // ~32 ms — blocking ProcessSample() for that long wedged the transport entirely.
+        uint32_t r;
+        if (!poll(&r)) {
+            if (!busy_ && ++tick_ >= 200) {
+                tick_ = 0;
+                beat_ = !beat_;
+                // slow SCK-polarity toggle so both get tried (~3s each). Between words only.
+                if (++polTick_ >= 720) { polTick_ = 0; sckInv_ ^= 1; applySck(); }
+                uint32_t hz = (SwitchVal() == Switch::Up)     ? 25'000u
+                            : (SwitchVal() == Switch::Middle) ?  5'000u
+                                                               :  1'000u;
+                pio_sm_set_clkdiv(GBA_PIO, GBA_SM,
+                                  (float)clock_get_hz(clk_sys) / (GBA_PIO_CYCLES_PER_BIT * hz));
+                post();
+            }
+            return;
+        }
         uint8_t b3 = (r >> 24) & 0xFF;
         uint8_t b2 = (r >> 16) & 0xFF;
         uint16_t lo = r & 0xFFFF;
@@ -82,7 +87,7 @@ private:
         sm_config_set_sideset_pins(&c, GBA_SCK_PIN);
         sm_config_set_out_shift(&c, false, true, 32);
         sm_config_set_in_shift(&c, false, true, 32);
-        sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / (3.0f * 25'000u));
+        sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / (GBA_PIO_CYCLES_PER_BIT * 25'000u));
 
         pio_sm_set_pins_with_mask(GBA_PIO, GBA_SM, 0, (1u<<GBA_SCK_PIN)|(1u<<GBA_MOSI_PIN));
         pio_sm_set_pindirs_with_mask(GBA_PIO, GBA_SM,
@@ -93,22 +98,31 @@ private:
         pio_gpio_init(GBA_PIO, GBA_MISO_PIN);
         gpio_pull_up(GBA_MISO_PIN);
         applySck();
-        gpio_set_outover(GBA_MOSI_PIN, GPIO_OVERRIDE_INVERT);
-        gpio_set_inover (GBA_MISO_PIN, GPIO_OVERRIDE_NORMAL);
+        gpio_set_outover(GBA_MOSI_PIN, GBA_MOSI_OUTOVER);   // shared constants, gba_spi.h
+        gpio_set_inover (GBA_MISO_PIN, GBA_MISO_INOVER);
         hw_set_bits(&GBA_PIO->input_sync_bypass, 1u << GBA_MISO_PIN);
         pio_sm_init(GBA_PIO, GBA_SM, off_, &c);
         pio_sm_set_enabled(GBA_PIO, GBA_SM, true);
     }
 
-    uint32_t __not_in_flash_func(xfer)()
+    void __not_in_flash_func(post)()
     {
-        pio_sm_put_blocking(GBA_PIO, GBA_SM, 0x00006202);
-        return pio_sm_get_blocking(GBA_PIO, GBA_SM);
+        if (pio_sm_is_tx_fifo_full(GBA_PIO, GBA_SM)) return;
+        pio_sm_put(GBA_PIO, GBA_SM, 0x00006202);
+        busy_ = true;
+    }
+
+    bool __not_in_flash_func(poll)(uint32_t *out)
+    {
+        if (!busy_ || pio_sm_is_rx_fifo_empty(GBA_PIO, GBA_SM)) return false;
+        *out = pio_sm_get(GBA_PIO, GBA_SM);
+        busy_ = false;
+        return true;
     }
 
     int  tick_ = 0, polTick_ = 0, sckInv_ = 0;
     uint off_ = 0;
-    bool beat_ = false;
+    bool beat_ = false, busy_ = false;
 };
 
 int main()

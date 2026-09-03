@@ -19,9 +19,9 @@ static uint gba_pio_offset = 0;
 
 static float clkdiv_for(uint32_t sck_hz)
 {
-    // The SM runs 3 instructions per SPI bit (see gba_spi.pio), so one SCK period is
-    // 3 SM cycles. div = f_sys / (3 * sck_hz). Clamp to the PIO minimum of 1.0.
-    float div = (float)clock_get_hz(clk_sys) / (3.0f * (float)sck_hz);
+    // One SPI bit costs GBA_PIO_CYCLES_PER_BIT SM cycles (see gba_spi.h — it is 4, not 3:
+    // the cpha1 `mov` carries a [1] delay). div = f_sys / (cycles * sck_hz). Clamp to 1.0.
+    float div = (float)clock_get_hz(clk_sys) / (GBA_PIO_CYCLES_PER_BIT * (float)sck_hz);
     if (div < 1.0f) div = 1.0f;
     return div;
 }
@@ -64,13 +64,11 @@ void gba_spi_init(uint32_t sck_hz)
     // — otherwise the input reads a constant level and MISO is stuck (all-0s/all-1s).
     gpio_pull_up(GBA_MISO_PIN);
 
-    // Net pad inversions — see gba_spi.pio for the derivation:
-    //   SCK : CPOL=1 invert cancels the Workshop output invert  -> NORMAL
-    //   MOSI: Workshop output invert                            -> INVERT
-    //   MISO: Workshop input invert                             -> INVERT
-    gpio_set_outover(GBA_SCK_PIN,  GPIO_OVERRIDE_NORMAL);
-    gpio_set_outover(GBA_MOSI_PIN, GPIO_OVERRIDE_INVERT);
-    gpio_set_inover (GBA_MISO_PIN, GPIO_OVERRIDE_INVERT);
+    // Net pad inversions — scope-measured, defined once in gba_spi.h. MISO was INVERT here
+    // and that was a real bug: the input stage does not invert (measured 2026-09-03).
+    gpio_set_outover(GBA_SCK_PIN,  GBA_SCK_OUTOVER);
+    gpio_set_outover(GBA_MOSI_PIN, GBA_MOSI_OUTOVER);
+    gpio_set_inover (GBA_MISO_PIN, GBA_MISO_INOVER);
 
     // MISO is a genuinely synchronous SPI input; bypass the input synchroniser to cut
     // ~2 cycles of read latency (matters as the clock rate rises). SDK 2.2.0 has no helper

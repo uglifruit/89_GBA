@@ -20,9 +20,15 @@
 ;   * the Workshop output stage already inverts Pulse Out 1.
 ;   Two inversions cancel => SCK pad override = NORMAL.
 ;   MOSI: Workshop inverts Pulse Out 2 once            => MOSI pad override = INVERT.
-;   MISO: Workshop inverts Pulse In 1 once             => MISO pad override = INVERT.
+;   MISO: SCOPE-MEASURED 2026-09-03 => MISO pad override = NORMAL. The earlier claim that
+;         "Workshop inverts Pulse In 1 once" was wrong: ComputerCard's PulseIn1() returning
+;         !gpio_get is a SOFTWARE convention, not a pad inversion. Verified with a patch
+;         cable Pulse Out 2 -> Pulse In 1, probing both ends: they go high together.
+;   The authoritative values now live as constants in gba_spi.h, used by every init site.
 ;
-; One SPI bit = 3 PIO instructions; SCK period is set by the clock divider in C. Multiboot
+; One SPI bit = 4 PIO *cycles* in BOTH programs (cpha1 is 3 instructions but the `mov`
+; carries a [1]; cpha0 is 2 instructions each with [1]). See GBA_PIO_CYCLES_PER_BIT in
+; gba_spi.h — dividing by 3 made every requested rate run 4/3 too fast. Multiboot
 ; is happy at low rates (reference uploaders use 50 kHz–1 MHz), which suits the slow,
 ; transistor-conditioned Pulse In 1. Autopush/autopull (32-bit thresholds) are set in C.
 
@@ -57,7 +63,7 @@
 ;       (1u<<GBA_SCK_PIN)|(1u<<GBA_MOSI_PIN)|(1u<<GBA_MISO_PIN));
 ;   pio_gpio_init(pio, GBA_SCK_PIN); pio_gpio_init(pio, GBA_MOSI_PIN); pio_gpio_init(pio, GBA_MISO_PIN);
 ;   // Net inversions (see table above):
-;   gpio_set_outover(GBA_SCK_PIN,  GPIO_OVERRIDE_NORMAL);   // CPOL invert * HW invert cancel
-;   gpio_set_outover(GBA_MOSI_PIN, GPIO_OVERRIDE_INVERT);   // HW invert
-;   gpio_set_inover (GBA_MISO_PIN, GPIO_OVERRIDE_INVERT);   // HW invert
+;   gpio_set_outover(GBA_SCK_PIN,  GBA_SCK_OUTOVER);   // NORMAL  (CPOL * HW invert cancel)
+;   gpio_set_outover(GBA_MOSI_PIN, GBA_MOSI_OUTOVER);  // INVERT  (HW invert)
+;   gpio_set_inover (GBA_MISO_PIN, GBA_MISO_INOVER);   // NORMAL  (measured, not derived)
 ;   pio_set_input_sync_bypass_with_mask(pio, 1u<<GBA_MISO_PIN, 1u<<GBA_MISO_PIN);

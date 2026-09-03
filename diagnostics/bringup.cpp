@@ -82,7 +82,7 @@ private:
             // stage 3 uses cpha0 (leading-edge, the one that got structured bits from the GBA).
             loadPio(sw == Switch::Down /* leadingEdge */);
         }
-        cnt_ = 0; sckInv_ = 0;
+        cnt_ = 0; sckInv_ = 0; busy_ = false;
     }
 
     // ---- STAGE 1: signal generator ----
@@ -111,10 +111,13 @@ private:
     // ---- STAGE 2: loopback (jumper PU2out -> PU1in) ----
     void stage2_loopback()
     {
-        if (++cnt_ < 2000) return;
-        cnt_ = 0;
+        // Collect a pending reply first; only start a new word when idle and the gap elapsed.
+        uint32_t got;
+        if (!poll(&got)) {
+            if (!busy_ && ++cnt_ >= 2000) { cnt_ = 0; post(0x00006202); }
+            return;
+        }
         const uint32_t sent = 0x00006202;
-        uint32_t got = xfer(sent);
         bool match = (got == sent);
         bool dead  = (got == 0 || got == 0xFFFFFFFF);
         bool inv   = (got == ~sent);
@@ -129,14 +132,19 @@ private:
     // ---- STAGE 3: live GBA handshake ----
     void stage3_gba()
     {
-        if (++cnt_ < 200) return;
-        cnt_ = 0;
-
-        // auto-toggle SCK polarity ~every 2s so both get tried
-        if (++polCnt_ >= 480) { polCnt_ = 0; sckInv_ ^= 1;
-            gpio_set_outover(GBA_SCK_PIN, sckInv_ ? GPIO_OVERRIDE_INVERT : GPIO_OVERRIDE_NORMAL); }
-
-        uint32_t r  = xfer(0x00006202);
+        uint32_t r;
+        if (!poll(&r)) {
+            if (!busy_ && ++cnt_ >= 200) {
+                cnt_ = 0;
+                // auto-toggle SCK polarity ~every 2s so both get tried. Only ever changed
+                // between words, never mid-transfer.
+                if (++polCnt_ >= 480) { polCnt_ = 0; sckInv_ ^= 1;
+                    gpio_set_outover(GBA_SCK_PIN,
+                        sckInv_ ? GPIO_OVERRIDE_INVERT : GPIO_OVERRIDE_NORMAL); }
+                post(0x00006202);
+            }
+            return;
+        }
         uint16_t lo = r & 0xFFFF;
         uint16_t hi = r >> 16;
         bool echo = (lo == 0x6202);
@@ -165,7 +173,7 @@ private:
         sm_config_set_sideset_pins(&c, GBA_SCK_PIN);
         sm_config_set_out_shift(&c, false, true, 32);
         sm_config_set_in_shift(&c, false, true, 32);
-        sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / (3.0f * 50'000u));
+        sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / (GBA_PIO_CYCLES_PER_BIT * 50'000u));
         pio_sm_set_pins_with_mask(GBA_PIO, GBA_SM, 0, (1u<<GBA_SCK_PIN)|(1u<<GBA_MOSI_PIN));
         pio_sm_set_pindirs_with_mask(GBA_PIO, GBA_SM,
             (1u<<GBA_SCK_PIN)|(1u<<GBA_MOSI_PIN),
@@ -174,26 +182,43 @@ private:
         pio_gpio_init(GBA_PIO, GBA_MOSI_PIN);
         pio_gpio_init(GBA_PIO, GBA_MISO_PIN);
         gpio_pull_up(GBA_MISO_PIN);                                   // Pulse In 1 transistor bias
-        gpio_set_outover(GBA_SCK_PIN,  GPIO_OVERRIDE_NORMAL);
-        gpio_set_outover(GBA_MOSI_PIN, GPIO_OVERRIDE_INVERT);
-        gpio_set_inover (GBA_MISO_PIN, GPIO_OVERRIDE_NORMAL);
+        gpio_set_outover(GBA_SCK_PIN,  GBA_SCK_OUTOVER);   // shared constants, gba_spi.h
+        gpio_set_outover(GBA_MOSI_PIN, GBA_MOSI_OUTOVER);
+        gpio_set_inover (GBA_MISO_PIN, GBA_MISO_INOVER);
         hw_set_bits(&GBA_PIO->input_sync_bypass, 1u << GBA_MISO_PIN);
         pio_sm_init(GBA_PIO, GBA_SM, off_, &c);
         pio_sm_set_enabled(GBA_PIO, GBA_SM, true);
         pioLoaded_ = true;
     }
 
-    uint32_t __not_in_flash_func(xfer)(uint32_t w)
+    // NON-BLOCKING transport. ProcessSample() runs at 48 kHz (20.8 us budget); a 32-bit word
+    // at 37.5 kHz takes ~854 us, so the old put_blocking/get_blocking pair stalled the audio
+    // callback for ~41 sample periods. The DMA IRQ then re-entered mid-transfer and the SM
+    // was left half-fed — which is exactly the "SC idles high with only 2-3 clock pulses"
+    // the scope showed. Post a word, return immediately, collect it on a later callback.
+    // (The real applet does this on core 1, where blocking is fine; only the diagnostic
+    // lives on core 0, so only the diagnostic needed fixing.)
+    void __not_in_flash_func(post)(uint32_t w)
     {
-        pio_sm_put_blocking(GBA_PIO, GBA_SM, w);
-        return pio_sm_get_blocking(GBA_PIO, GBA_SM);
+        if (pio_sm_is_tx_fifo_full(GBA_PIO, GBA_SM)) return;
+        pio_sm_put(GBA_PIO, GBA_SM, w);
+        busy_ = true;
+    }
+
+    // Returns true and fills `out` once a reply word is available.
+    bool __not_in_flash_func(poll)(uint32_t *out)
+    {
+        if (!busy_ || pio_sm_is_rx_fifo_empty(GBA_PIO, GBA_SM)) return false;
+        *out = pio_sm_get(GBA_PIO, GBA_SM);
+        busy_ = false;
+        return true;
     }
 
     Switch lastSw_ = (Switch)0xFF;
     const pio_program_t *prog_ = nullptr;
     uint off_ = 0;
     int  cnt_ = 0, polCnt_ = 0, sckInv_ = 0;
-    bool state_ = false, beat_ = false, pioLoaded_ = false;
+    bool state_ = false, beat_ = false, pioLoaded_ = false, busy_ = false;
     bool echoSeen_ = false, syncSeen_ = false;
 };
 
