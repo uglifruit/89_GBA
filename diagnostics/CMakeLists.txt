@@ -72,3 +72,17 @@ pico_add_extra_outputs(bringup)
 target_compile_definitions(bringup PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
 pico_enable_stdio_usb(bringup 0)
 target_compile_options(bringup PRIVATE -Wall -Wextra)
+
+# LED-only link diagnostic: click-to-advance tests, no scope and no held switch.
+add_executable(linkcheck
+    linkcheck.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gba_multiboot.cpp)
+pico_generate_pio_header(linkcheck ${CMAKE_CURRENT_LIST_DIR}/../gba_spi.pio)
+target_include_directories(linkcheck PUBLIC ${CMAKE_CURRENT_LIST_DIR}/..)
+target_link_libraries(linkcheck
+    pico_unique_id pico_stdlib hardware_dma hardware_i2c hardware_pwm
+    hardware_adc hardware_spi hardware_pio pico_multicore)
+pico_add_extra_outputs(linkcheck)
+target_compile_definitions(linkcheck PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
+pico_enable_stdio_usb(linkcheck 0)
+target_compile_options(linkcheck PRIVATE -Wall -Wextra)
