@@ -126,7 +126,7 @@ private:
         // still be read out after switching away from the test that produced it.
         echoLatch_ = syncLatch_ = structLatch_ = false;
         misoSeenHigh_ = misoSeenLow_ = false;
-        cnt_ = 0; busy_ = false; sweepSlot_ = 0; sweepTick_ = 0; bestSlot_ = 0; bestScore_ = 0;
+        cnt_ = 0; busy_ = false; stall_ = 0; stalls_ = 0; sweepSlot_ = 0; sweepTick_ = 0; bestSlot_ = 0; bestScore_ = 0;
 
         if (test_ == 0) {
             // Idle test drives nothing: hand the pins back to plain SIO inputs so we can
@@ -145,8 +145,10 @@ private:
     // ── knobs ────────────────────────────────────────────────────────────────────────────
     // Knob range is 0..4095. Treat the outer thirds as the two choices so a roughly-centred
     // knob is never ambiguous.
-    bool wantLeadingEdge() { return KnobVal(Knob::X) > 2048; }
-    bool wantSckInvert()   { return KnobVal(Knob::Y) > 2048; }
+    // Hysteresis: a knob parked near the middle jitters by tens of counts on the ADC, and
+    // without a dead band that thrashed loadPio() continuously.
+    bool wantLeadingEdge() { int32_t v = KnobVal(Knob::X); if (v > 2600) edgeSel_ = true; else if (v < 1500) edgeSel_ = false; return edgeSel_; }
+    bool wantSckInvert()   { int32_t v = KnobVal(Knob::Y); if (v > 2600) polSel_  = true; else if (v < 1500) polSel_  = false; return polSel_; }
 
     uint32_t knobRate()
     {
@@ -187,6 +189,10 @@ private:
         pio_sm_set_enabled(GBA_PIO, GBA_SM, true);
         pioLoaded_ = true;
         leading_ = leadingEdge;
+        // The SM was just torn down and re-inited, so any word we thought was in flight is
+        // gone. Not clearing this wedged test 2 permanently: poll() waited for a reply that
+        // could never arrive and post() refused to start another because busy_ was stuck.
+        busy_ = false;
     }
 
     static float clkdiv(uint32_t hz)
@@ -218,7 +224,15 @@ private:
 
     bool __not_in_flash_func(poll)(uint32_t *out)
     {
-        if (busy_) { if (gpio_get(GBA_MISO_PIN)) misoSeenHigh_ = true; else misoSeenLow_ = true; }
+        if (busy_) {
+            if (gpio_get(GBA_MISO_PIN)) misoSeenHigh_ = true; else misoSeenLow_ = true;
+            // Watchdog. Even the slowest rate (1 kHz) completes a 32-bit word in ~32 ms
+            // = ~1540 samples, so 48000 samples (1 s) means the transfer is never finishing.
+            // Re-arm instead of hanging: a wedged diagnostic looks exactly like dead hardware.
+            if (++stall_ > 48000) { stall_ = 0; busy_ = false; stalls_++; pio_sm_clear_fifos(GBA_PIO, GBA_SM); }
+        } else {
+            stall_ = 0;
+        }
         if (!busy_ || pio_sm_is_rx_fifo_empty(GBA_PIO, GBA_SM)) return false;
         *out = pio_sm_get(GBA_PIO, GBA_SM);
         lastWord_ = *out;
@@ -291,9 +305,12 @@ private:
         latched(0, echo, echoLatch_);
         latched(1, sync, syncLatch_);
         latched(2, structured, structLatch_);
-        // LED3 = current SCK polarity (dim normal / bright inverted). Moved off LED4, which
-        // is now the mode indicator.
-        LedBrightness(3, sckInv_ ? 4095 : 250);
+        // LED3 = current SCK polarity (dim normal / bright inverted) — but if the transport
+        // is stalling (no reply ever arriving) it FLASHES FAST instead. That distinguishes
+        // "the GBA is silent" from "our own transfer never completed", which the LEDs
+        // previously could not tell apart: both looked like four dark LEDs.
+        if (stalls_ > 0) LedOn(3, (tick_ >> 10) & 1);
+        else             LedBrightness(3, sckInv_ ? 4095 : 250);
         showMode();
     }
 
@@ -397,6 +414,8 @@ private:
     int  test_ = 0, sweepSlot_ = 0, bestSlot_ = 0, bestScore_ = 0, roIdx_ = 0;
     bool pioLoaded_ = false, busy_ = false, leading_ = true, sckInv_ = false;
     bool echoLatch_ = false, syncLatch_ = false, structLatch_ = false;
+    bool edgeSel_ = true, polSel_ = false;
+    uint32_t stall_ = 0, stalls_ = 0;
     bool misoSeenHigh_ = false, misoSeenLow_ = false, readout_ = false;
     Switch lastSw_ = Switch::Middle;
 
