@@ -74,6 +74,17 @@
 #include "hardware/clocks.h"
 #include "gba_spi.pio.h"
 
+// The five sampling variants, with their true cycles-per-bit (they differ, so the clock
+// divider must be computed per program — getting this wrong is what made every earlier
+// requested rate off by 4/3).
+//
+// GBATEK, SIO Normal Mode: "During inactive transfer, the shift clock (SC) is high" and
+// "When master sends SC=LOW, each master and slave must output the next outgoing data bit
+// to SO. When master sends SC=HIGH, each master and slave must read out the opponents data
+// bit from SI." => drive on the falling edge, sample on the rising edge = SPI mode 3.
+// Index 0 is therefore the canonical one and is the DEFAULT.
+struct SpiVariant { const pio_program_t *prog; float cycles; const char *name; };
+
 class LinkCheck : public ComputerCard
 {
 public:
@@ -138,7 +149,7 @@ private:
             gpio_pull_up(GBA_MISO_PIN);          // Pulse In 1 transistor bias — dead without it
             gpio_set_inover(GBA_MISO_PIN, GBA_MISO_INOVER);
         } else {
-            loadPio(wantLeadingEdge());
+            loadPio(wantVariant());
         }
     }
 
@@ -147,7 +158,9 @@ private:
     // knob is never ambiguous.
     // Hysteresis: a knob parked near the middle jitters by tens of counts on the ADC, and
     // without a dead band that thrashed loadPio() continuously.
-    bool wantLeadingEdge() { int32_t v = KnobVal(Knob::X); if (v > 2600) edgeSel_ = true; else if (v < 1500) edgeSel_ = false; return edgeSel_; }
+    // Knob X picks the sampling variant (5 detented zones across the travel). Fully CCW is
+    // the GBATEK-canonical one, which is where you should start.
+    int wantVariant() { int32_t v = KnobVal(Knob::X); int i = (v * kNumVariants) / 4096; return (i < 0) ? 0 : (i >= kNumVariants ? kNumVariants - 1 : i); }
     bool wantSckInvert()   { int32_t v = KnobVal(Knob::Y); if (v > 2600) polSel_  = true; else if (v < 1500) polSel_  = false; return polSel_; }
 
     uint32_t knobRate()
@@ -158,20 +171,38 @@ private:
         return 1000u + (k * k) / 170u;                   // 1k .. ~99k
     }
 
-    // ── PIO ──────────────────────────────────────────────────────────────────────────────
-    void loadPio(bool leadingEdge)
+    static const SpiVariant *variants()
     {
+        static const SpiVariant v[5] = {
+            { &gba_spi_m3_edge_program,  4.0f, "m3-edge (GBATEK canonical)" },
+            { &gba_spi_m3_hold_program,  5.0f, "m3-hold (sample end of low)" },
+            { &gba_spi_m3_late_program,  6.0f, "m3-late (extra settling)"   },
+            { &gba_spi_m3_wide_program, 12.0f, "m3-wide (slow edges)"       },
+            { &gba_spi_cpha0_program,    4.0f, "cpha0 (GBATEK says wrong)"  },
+        };
+        return v;
+    }
+    static constexpr int kNumVariants = 5;
+
+    // ── PIO ──────────────────────────────────────────────────────────────────────────────
+    void loadPio(int idx)
+    {
+        if (idx < 0 || idx >= kNumVariants) idx = 0;
         if (pioLoaded_) { pio_sm_set_enabled(GBA_PIO, GBA_SM, false); pio_remove_program(GBA_PIO, prog_, off_); }
-        prog_ = leadingEdge ? &gba_spi_cpha0_program : &gba_spi_program;
+        prog_ = variants()[idx].prog;
         off_  = pio_add_program(GBA_PIO, prog_);
-        pio_sm_config c = leadingEdge ? gba_spi_cpha0_program_get_default_config(off_)
-                                      : gba_spi_program_get_default_config(off_);
+        // All five share the same pin/shift configuration; only the timing differs, so a
+        // hand-rolled config is fine and avoids five *_get_default_config() branches.
+        pio_sm_config c = pio_get_default_sm_config();
+        sm_config_set_wrap(&c, off_, off_ + prog_->length - 1);
+        sm_config_set_sideset(&c, 1, false, false);
+        sm_config_set_sideset_pins(&c, GBA_SCK_PIN);
         sm_config_set_out_pins(&c, GBA_MOSI_PIN, 1);
         sm_config_set_in_pins(&c, GBA_MISO_PIN);
         sm_config_set_sideset_pins(&c, GBA_SCK_PIN);
         sm_config_set_out_shift(&c, false, true, 32);
         sm_config_set_in_shift(&c, false, true, 32);
-        sm_config_set_clkdiv(&c, clkdiv(curRate_));
+        sm_config_set_clkdiv(&c, clkdiv(curRate_, variants()[idx].cycles));
 
         pio_sm_set_pins_with_mask(GBA_PIO, GBA_SM, 0, (1u<<GBA_SCK_PIN)|(1u<<GBA_MOSI_PIN));
         pio_sm_set_pindirs_with_mask(GBA_PIO, GBA_SM,
@@ -188,18 +219,19 @@ private:
         pio_sm_init(GBA_PIO, GBA_SM, off_, &c);
         pio_sm_set_enabled(GBA_PIO, GBA_SM, true);
         pioLoaded_ = true;
-        leading_ = leadingEdge;
+        progIdx_ = idx;
         // The SM was just torn down and re-inited, so any word we thought was in flight is
         // gone. Not clearing this wedged test 2 permanently: poll() waited for a reply that
         // could never arrive and post() refused to start another because busy_ was stuck.
         busy_ = false;
     }
 
-    static float clkdiv(uint32_t hz)
+    static float clkdiv(uint32_t hz, float cycles)
     {
-        float d = (float)clock_get_hz(clk_sys) / (GBA_PIO_CYCLES_PER_BIT * (float)hz);
+        float d = (float)clock_get_hz(clk_sys) / (cycles * (float)hz);
         return d < 1.0f ? 1.0f : d;
     }
+    float curCycles() const { return variants()[progIdx_].cycles; }
 
     void applySck(bool inv)
     {
@@ -317,19 +349,26 @@ private:
     // ── TEST 3: auto sweep ───────────────────────────────────────────────────────────────
     void test3_sweep()
     {
+        // 5 variants x 2 polarities x 5 rates = 50 slots, ~0.7 s each => a full pass is
+        // ~35 s. Let it run a full minute before concluding anything.
         static const uint32_t kRates[5] = { 1000, 5000, 16000, 50000, 100000 };
+        const int kSlots = kNumVariants * 2 * 5;
 
-        if (++sweepTick_ >= 34000) {          // ~0.7 s per slot
+        if (++sweepTick_ >= 34000) {
             sweepTick_ = 0;
-            sweepSlot_ = (sweepSlot_ + 1) % (2 * 2 * 5);
-            uint32_t rate = kRates[sweepSlot_ % 5];
-            bool inv      = ((sweepSlot_ / 5) & 1) != 0;
-            bool leading  = ((sweepSlot_ / 10) & 1) != 0;
-            curRate_ = rate;
-            if (leading != leading_) { loadPio(leading); }
-            else { pio_sm_set_clkdiv(GBA_PIO, GBA_SM, clkdiv(rate)); pio_sm_clkdiv_restart(GBA_PIO, GBA_SM); }
+            sweepSlot_ = (sweepSlot_ + 1) % kSlots;
+            int rateIx = sweepSlot_ % 5;
+            bool inv   = ((sweepSlot_ / 5) & 1) != 0;
+            int varIx  = (sweepSlot_ / 10) % kNumVariants;
+            curRate_ = kRates[rateIx];
+            if (varIx != progIdx_) {
+                loadPio(varIx);
+            } else {
+                pio_sm_set_clkdiv(GBA_PIO, GBA_SM, clkdiv(curRate_, curCycles()));
+                pio_sm_clkdiv_restart(GBA_PIO, GBA_SM);
+            }
             applySck(inv);
-            busy_ = false;
+            busy_ = false; stall_ = 0;
         }
 
         uint32_t r;
@@ -342,16 +381,17 @@ private:
             if (echo) echoLatch_ = true;
             if (sync) syncLatch_ = true;
             if (structured) structLatch_ = true;
-            int score = (sync ? 4 : 0) + (echo ? 2 : 0) + (structured ? 1 : 0);
-            if (score > bestScore_) { bestScore_ = score; bestSlot_ = sweepSlot_; }
+            int score = (sync ? 8 : 0) + (echo ? 4 : 0) + (structured ? 1 : 0);
+            if (score > bestScore_) { bestScore_ = score; bestSlot_ = sweepSlot_; bestWord_ = r; }
         }
 
         latched(0, false, echoLatch_);
         latched(1, false, syncLatch_);
-        // Which slot won, as 2 bits: LED2 = polarity, LED3 = edge. (Was LED3/LED4; LED4 is
-        // the mode indicator now.)
-        LedOn(2, (bestSlot_ / 5)  & 1);
-        LedOn(3, (bestSlot_ / 10) & 1);
+        latched(2, false, structLatch_);
+        // LED3 = "a best slot has been recorded". Read WHICH slot out with the word readout
+        // (hold UP): the readout shows the best slot number as its first nibble when the
+        // sweep has found something, then the winning word.
+        LedOn(3, bestScore_ > 0);
         showMode();
     }
 
@@ -361,7 +401,12 @@ private:
         // ~1.2 s per nibble, with a short gap so two identical nibbles are distinguishable.
         if (++roTick_ >= 58000) { roTick_ = 0; roIdx_ = (roIdx_ + 1) & 7; }
         bool gap = (roTick_ > 50000);
-        uint32_t nib = (lastWord_ >> (28 - 4 * roIdx_)) & 0xF;
+        // In the sweep, read out the WINNING word (and its slot) rather than whatever the
+        // sweep happened to be trying when you pressed the switch.
+        uint32_t w = (test_ == 3 && bestScore_ > 0) ? bestWord_ : lastWord_;
+        uint32_t nib = (roIdx_ == 0 && test_ == 3 && bestScore_ > 0)
+                     ? (uint32_t)(bestSlot_ & 0xF)        // first nibble = winning slot & 15
+                     : (w >> (28 - 4 * roIdx_)) & 0xF;
         for (int i = 0; i < 4; i++) LedOn(i, !gap && ((nib >> i) & 1));
         LedBrightness(4, (roIdx_ < 4) ? 4095 : 250);   // bright = high half, dim = low half
         LedOn(5, gap);                                  // blinks between nibbles
@@ -397,10 +442,10 @@ private:
         // mid-word would corrupt the transfer in flight.
         if (busy_ || (++knobTick_ & 0x3FF)) return;
         uint32_t r = knobRate();
-        bool le = wantLeadingEdge();
+        int want = wantVariant();
         bool inv = wantSckInvert();
-        if (le != leading_) { curRate_ = r; loadPio(le); }
-        else if (r != curRate_) { curRate_ = r; pio_sm_set_clkdiv(GBA_PIO, GBA_SM, clkdiv(r)); pio_sm_clkdiv_restart(GBA_PIO, GBA_SM); }
+        if (want != progIdx_) { curRate_ = r; loadPio(want); }
+        else if (r != curRate_) { curRate_ = r; pio_sm_set_clkdiv(GBA_PIO, GBA_SM, clkdiv(r, curCycles())); pio_sm_clkdiv_restart(GBA_PIO, GBA_SM); }
         if (inv != sckInv_) applySck(inv);
     }
 
@@ -410,11 +455,12 @@ private:
     uint32_t tick_ = 0, cnt_ = 0, knobTick_ = 0, upHeld_ = 0;
     uint32_t sweepTick_ = 0, roTick_ = 0;
     uint32_t curRate_ = 25000;
-    uint32_t lastWord_ = 0;
+    uint32_t lastWord_ = 0, bestWord_ = 0;
     int  test_ = 0, sweepSlot_ = 0, bestSlot_ = 0, bestScore_ = 0, roIdx_ = 0;
-    bool pioLoaded_ = false, busy_ = false, leading_ = true, sckInv_ = false;
+    bool pioLoaded_ = false, busy_ = false, sckInv_ = false;
+    int  progIdx_ = 0;
     bool echoLatch_ = false, syncLatch_ = false, structLatch_ = false;
-    bool edgeSel_ = true, polSel_ = false;
+    bool polSel_ = false;
     uint32_t stall_ = 0, stalls_ = 0;
     bool misoSeenHigh_ = false, misoSeenLow_ = false, readout_ = false;
     Switch lastSw_ = Switch::Middle;

@@ -1,5 +1,8 @@
 # Hardware bring-up notes (89_GBA)
 
+> **Start at `TESTPLAN.md`** — it is the current step-by-step bench procedure, with a
+> decision tree for each outcome. This file is the accumulated background behind it.
+
 Status: **ELECTRICAL LAYER CLEAR — ready for the live GBA handshake (stage 3).**
 Readings A, B and C all passed on 2026-09-03; a working cable is built. The only untested
 element left in the chain is the GBA itself. Pick up at "Reading D" below.
@@ -90,12 +93,18 @@ already clocking when it powers up. Power-cycle the *GBA* (not the Computer) to 
   cannot catch either line's polarity alone — that is what Reading B was for.
 - **Pull-up fix is in** `gba_multiboot.cpp`: after `pio_gpio_init` on the MISO pin, we
   re-`gpio_pull_up(GBA_MISO_PIN)` — the Pulse In 1 transistor input is dead without it.
-- **Sample edge:** the reference uploaders (tangrs, jojolebarjos) sample MISO on the
-  **leading (rising)** SCK edge. Our original `gba_spi` samples on the trailing edge (likely
-  wrong); `gba_spi_cpha0` samples on the leading edge and was the only config returning
-  structured bits from a real GBA. Once the cable is sane, sweep with `gba_probe.uf2` and if
-  `cpha0` gives the clean 0x6202 echo (LED "echo good"), switch the applet's transport to the
-  `gba_spi_cpha0` program + the winning SCK polarity.
+- **Sample edge — THE EARLIER NOTE HERE WAS WRONG (corrected 2026-09-04).** This file used
+  to say `gba_spi_cpha0` (leading-edge) was probably right and `gba_spi` probably wrong. An
+  audit against GBATEK says the opposite. GBATEK, *SIO Normal Mode*: "During inactive
+  transfer, the shift clock (SC) is high" and "When master sends SC=LOW, each master and
+  slave must output the next outgoing data bit to SO. When master sends SC=HIGH, each master
+  and slave must read out the opponents data bit from SI." That is **SPI mode 3**: idle high,
+  drive on the falling edge, sample on the rising edge — which is what `gba_spi` already
+  does, and what the applet has always used. `gba_spi_cpha0` samples during the DRIVE phase.
+  The old claim rested on reasoning about the reference uploaders, never on a measurement.
+  The scope has since confirmed the polarity half independently: with the SM stalled on
+  `side 0` the SC jack idles HIGH at 6 V (Pulse Out 1 inverts), exactly GBATEK's idle state.
+  `linkcheck` now carries five sampling variants and defaults to the GBATEK-canonical one.
 - **Best sync test:** GBATEK — in normal mode the reply's LOW 16 bits echo the master's sent
   low-16, so sending 0x00006202 returns 0x????6202. That echo is a loopback *through the GBA*
   and confirms bit timing independent of recognition (upper 16 = 0x7202).

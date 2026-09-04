@@ -86,3 +86,17 @@ pico_add_extra_outputs(linkcheck)
 target_compile_definitions(linkcheck PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
 pico_enable_stdio_usb(linkcheck 0)
 target_compile_options(linkcheck PRIVATE -Wall -Wextra)
+
+# Cable/crossover discriminator — uses Pulse In 2 as a second listening port.
+add_executable(cablecheck
+    cablecheck.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gba_multiboot.cpp)
+pico_generate_pio_header(cablecheck ${CMAKE_CURRENT_LIST_DIR}/../gba_spi.pio)
+target_include_directories(cablecheck PUBLIC ${CMAKE_CURRENT_LIST_DIR}/..)
+target_link_libraries(cablecheck
+    pico_unique_id pico_stdlib hardware_dma hardware_i2c hardware_pwm
+    hardware_adc hardware_spi hardware_pio pico_multicore)
+pico_add_extra_outputs(cablecheck)
+target_compile_definitions(cablecheck PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
+pico_enable_stdio_usb(cablecheck 0)
+target_compile_options(cablecheck PRIVATE -Wall -Wextra)
