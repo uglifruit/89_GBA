@@ -18,9 +18,24 @@ accumulated background), and the pin map in `../gba_spi.h`.
 
 ## The GBA link socket
 
-Six pins. Pin 1 is at the **narrow** end of the trapezoid, pin 6 at the wide end; numbering
-runs 1→6 across the socket. All directions below are **from the GBA's point of view** while
-it is a multiboot slave (which is the only role we drive it in).
+Six pins in two rows of three: **odd 1/3/5 on one row, even 2/4/6 on the other**. The shell
+is a hexagon with an asymmetric **lump/key** — not a trapezoid. Pins **1 and 2 sit at the lump
+end**. The numbering MIRRORS between the plug and the socket, which is the single easiest
+thing to get wrong:
+
+```
+      PLUG (contacts toward you)          SOCKET (looking into the GBA)
+    ┌──────────────────────────┐      ┌──────────────────────────┐
+    │    1    3    5           │      │           5    3    1    │
+    │        ╱▔▔▔╲             │      │            ╱▔▔▔╲         │
+    │    2    4    6           │      │           6    4    2    │
+    └──────────────────────────┘      └──────────────────────────┘
+         lump at the 1/2 end               lump mirrors too
+```
+
+Anchor on the **lump**, never on "left" or "right" — it is the one feature that survives the
+connector being held either way up. All directions below are **from the GBA's point of view**
+while it is a multiboot slave (which is the only role we drive it in).
 
 | Pin | Name | Dir | Connects to | Workshop GPIO |
 |-----|------|-----|-------------|---------------|
@@ -61,6 +76,15 @@ Check continuity from each stripped wire to the GBA plug's pins:
 
 Then confirm **no wire is shorted to any other** — buzz every pair. A short between SC and
 GND, or SI and SO, will look exactly like "the handshake never syncs".
+
+Bench notes on the real DOL-011 (2026-09-03):
+
+- It has **three cores plus a shield**, and only three connected pins at the GameCube end.
+  That is correct and sufficient: the fourth connection (GND) rides the **shield/braid**.
+  Gather the braid into a pigtail and treat it as a real conductor — it is the ground your
+  first session was missing.
+- The GameCube end's pin numbering does **not** match GBA pin numbering. Do not infer names
+  from it; buzz each conductor through to the **GBA plug's** pins and label by that.
 
 ### B. GBA ↔ GBA link cable (AGB-005) — **the crossover trap**
 
@@ -117,5 +141,5 @@ that is gone.
 Power the **Computer first, then the GBA** — the GBA only syncs if the master is already
 clocking when it powers up. Power-cycle the *GBA*, not the Computer, to retry.
 
-Flash `bringup.uf2` and work the switch stages in order: UP (scope the output swing, GBA
-disconnected) → MIDDLE (loopback) → DOWN (live handshake). See `BRINGUP.md`.
+Go to **`TESTPLAN.md`** and work it from STEP 1. It starts with `cablecheck.uf2` MODE 0,
+which settles the crossover question by measurement before anything drives the console.
