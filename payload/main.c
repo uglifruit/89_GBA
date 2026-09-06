@@ -133,18 +133,26 @@ static uint16_t g_buttons = 0;
 #define BENCH_LEAVE 0xBE7C0000u
 
 static int g_bench = 0;
+static int g_benchDirty = 1;      // screen needs repainting for the current mode
 
 static void service(void)
 {
     if (!(REG_SIOCNT & SIO_START)) {          // a word completed (or we have never armed)
         uint32_t got = REG_SIODATA32;
-        static uint32_t prev = 0;
+        static int enterHits = 0, leaveHits = 0;
         g_params = got;
         g_rx++;
 
-        if (got == BENCH_ENTER && prev == BENCH_ENTER) g_bench = 1;
-        if (got == BENCH_LEAVE && prev == BENCH_LEAVE) g_bench = 0;
-        prev = got;
+        // COUNT the magic words rather than demanding they be strictly consecutive. The host
+        // sends a burst, but this slave is deaf while it redraws and can miss any individual
+        // word — so "two in a row" was unreliable in exactly the situation it had to work in.
+        // Three hits is still far beyond anything the normal applet could produce by accident:
+        // it would need all four knob/CV bytes to land on 0xBE7CBE7C three separate times.
+        if (got == BENCH_ENTER) { if (++enterHits >= 3 && !g_bench) { g_bench = 1; g_benchDirty = 1; } }
+        else if (got != BENCH_LEAVE) enterHits = 0;
+
+        if (got == BENCH_LEAVE) { if (++leaveHits >= 3 && g_bench) { g_bench = 0; g_benchDirty = 1; } }
+        else if (got != BENCH_ENTER) leaveHits = 0;
 
         REG_SIODATA32 = g_bench ? ((0x600Du << 16) | (got & 0xFFFFu))   // echo
                                 : ((0x600Du << 16) | g_buttons);        // normal reply
@@ -179,8 +187,22 @@ int main(void)
         // BENCH: service as tightly as possible and draw nothing. This measures the transport
         // ceiling itself; comparing it against the normal path shows what the UI costs.
         if (g_bench) {
+            if (g_benchDirty) {                 // paint the banner ONCE, then never again
+                g_benchDirty = 0;
+                rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);
+                service();
+                text_centre(60, "BENCH MODE", COL_WAIT, 2);
+                service();
+                text_centre(90, "measuring link", COL_DIM, 1);
+            }
             for (int i = 0; i < 2000; i++) service();
             continue;
+        }
+        if (g_benchDirty) {                     // returning to the normal UI: repaint the title
+            g_benchDirty = 0;
+            rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);
+            text_centre(14, "MTM - Workshop Computer Link", COL_TITLE, 1);
+            rect(20, 30, SCREEN_W - 40, 1, COL_DIM);
         }
 
         uint32_t rx = g_rx;

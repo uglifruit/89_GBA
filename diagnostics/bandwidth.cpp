@@ -95,14 +95,15 @@ static constexpr uint16_t kTag        = 0x600D;
 
 static void enterBench()
 {
-    // Two consecutive magic words; a few extra for good measure since the first ones may land
-    // while the payload is still finishing its first frame.
-    for (int i = 0; i < 8; i++) { gba_spi_xfer32(kBenchEnter); sleep_us(200); }
+    // The payload needs THREE of these to land, and it is deaf while it redraws — a window
+    // far longer than the 200 us this used to allow between words, so most of the burst was
+    // simply missed. Send plenty, spaced wider than a frame.
+    for (int i = 0; i < 24; i++) { gba_spi_xfer32(kBenchEnter); sleep_ms(2); }
 }
 
 static void leaveBench()
 {
-    for (int i = 0; i < 8; i++) { gba_spi_xfer32(kBenchLeave); sleep_us(200); }
+    for (int i = 0; i < 24; i++) { gba_spi_xfer32(kBenchLeave); sleep_ms(2); }
 }
 
 // How many words to exchange at a given rate. A fixed count made the 1 kHz rung take
