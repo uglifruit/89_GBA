@@ -76,13 +76,27 @@ depends on the answer. It drives no data, so it is safe whichever way the cable 
 
 ### Rewire (one wire moves, temporarily)
 
-| Socket pin | Goes to | Note |
+Normally SO and SI go to different *kinds* of pin — SO to an input (we listen), SI to an
+output (we drive). For this test **both go to inputs**. Nothing drives the GBA's data lines,
+so it is safe even if the labels on your breakout are swapped — and that is exactly what it
+is here to find out.
+
+By the labels on the breakout:
+
+| Your wire | Goes to | Why |
 |---|---|---|
-| 5 (SC) | Pulse Out 1 | keep the 1 kΩ |
-| 6 (GND) | Computer GND | |
-| 2 | **Pulse In 1** | |
-| 3 | **Pulse In 2** | ← move this off Pulse Out 2 |
-| — | Pulse Out 2 | leave disconnected |
+| **SC** | Pulse Out 1 (keep the 1 kΩ) | the clock — we drive it |
+| **GND** | Computer GND | return path |
+| **SO** | **Pulse In 1** | candidate A for "data from the GBA" |
+| **SI** | **Pulse In 2** | candidate B — temporarily an input too |
+| **SD** | leave disconnected | unused in normal/SIO32 mode |
+| **VCC** | leave disconnected, tape it off | the GBA *sources* this; it is an output |
+| — | **Pulse Out 2: nothing** | we drive no data in this mode |
+
+The only change from the working build: **the SI wire moves off Pulse Out 2 onto Pulse In 2.**
+
+The same thing by socket pin number, if you ever need to re-derive it: pin 5 = SC, pin 6 =
+GND, pin 2 = SO, pin 3 = SI, pin 4 = SD, pin 1 = VCC.
 
 Flash `cablecheck.uf2`. **LED4 + LED5 always show the mode in binary** — MODE 0 is both off.
 Power the Computer first, then the GBA. Cartridge-less, on the Nintendo logo screen.
@@ -91,42 +105,48 @@ Power the Computer first, then the GBA. Cartridge-less, on the Nintendo logo scr
 
 LED0 = Pulse In 1 has shown activity. LED1 = Pulse In 2 has shown activity.
 
+LED0 = Pulse In 1 (your **SO** wire). LED1 = Pulse In 2 (your **SI** wire).
+
 | What you see | Meaning | Go to |
 |---|---|---|
-| **LED0 on, LED1 off** | Pin 2 carries SO. **Cable is STRAIGHT.** Wiring was right all along. | **STEP 2A** |
-| **LED1 on, LED0 off** | Pin 3 carries SO. **Cable is CROSSED.** | **STEP 2B** |
+| **LED0 on, LED1 off** | Your **SO** wire carries the GBA's output. **Labels correct, cable STRAIGHT.** | **STEP 2A** |
+| **LED1 on, LED0 off** | Your **SI** wire carries it. **Labels swapped, cable CROSSED.** | **STEP 2B** |
 | **Both off** | GBA is not driving at all. | **STEP 3** |
-| **Both on** | Suspect a short between the data lines. | MODE 1, then **STEP 3** |
+| **Both on** | Suspect a short between the two data wires. | MODE 1, then **STEP 3** |
 
 ---
 
 ## STEP 2A — Cable is STRAIGHT
 
-Put the wiring back as it was:
+Your breakout labels are right. Put the SI wire back where it was:
 
-| Socket pin | Goes to |
+| Your wire | Goes to |
 |---|---|
-| 2 | Pulse In 1 |
-| 3 | Pulse Out 2 (via 1 kΩ) |
-| 5 | Pulse Out 1 (via 1 kΩ) |
-| 6 | Computer GND |
+| **SO** | Pulse In 1 |
+| **SI** | Pulse Out 2, via 1 kΩ |
+| **SC** | Pulse Out 1, via 1 kΩ |
+| **GND** | Computer GND |
+| SD, VCC | disconnected |
 
 Go to **STEP 4**.
 
 ## STEP 2B — Cable is CROSSED: the swap fix
 
-**Swap the two data wires at the Workshop end.** SC and GND do not move.
+The cable crosses SO/SI, so your breakout labels are the wrong way round. **Wire by
+behaviour, not by the label.** SC and GND do not move.
 
-| Socket pin | Was | **Now** |
-|---|---|---|
-| 3 | Pulse Out 2 | **Pulse In 1** (carries the GBA's SO — we read it) |
-| 2 | Pulse In 1 | **Pulse Out 2** via 1 kΩ (reaches the GBA's SI — we drive it) |
-| 5 | Pulse Out 1 | unchanged, via 1 kΩ |
-| 6 | GND | unchanged |
+| Your wire | Was | **Now** | Because |
+|---|---|---|---|
+| labelled **SI** | Pulse Out 2 | **Pulse In 1** | it really carries the GBA's SO — we listen |
+| labelled **SO** | Pulse In 1 | **Pulse Out 2**, via 1 kΩ | it really reaches the GBA's SI — we drive |
+| **SC** | Pulse Out 1 | unchanged, via 1 kΩ | |
+| **GND** | Computer GND | unchanged | |
+
+**Relabel the breakout now** so you never have to remember this again.
 
 **No firmware change is needed** — the swap happens in copper, and the pin roles in
-`gba_spi.h` stay exactly as they are. Move the 1 kΩ resistor with the driven wire, so the
-series resistors always sit on the two lines we drive and never on the line we listen to.
+`gba_spi.h` stay exactly as they are. Move the 1 kΩ resistor with the wire it belongs to, so
+the series resistors always sit on the two lines we DRIVE and never on the line we listen to.
 
 Then go to **STEP 4**.
 
