@@ -38,11 +38,21 @@ uint32_t gba_spi_xfer32(uint32_t w);
 // Single source of truth: the applet and every diagnostic MUST use these, so the four
 // init sites cannot silently disagree again.
 //
-// MISO: measured on the scope with a patch cable Pulse Out 2 -> Pulse In 1, probing both
-// ends. The receiving end followed the driving end (both high together) => the Workshop
-// input stage does NOT invert. ComputerCard's PulseIn1() returning !gpio_get is a SOFTWARE
-// convention, not a pad inversion; the earlier INVERT here was that conflation and was a
-// real bug (it would have broken multiboot even over a perfect cable).
+// MISO: **INVERT** — settled by the GBA itself on 2026-09-06, which outranks every earlier
+// inference. With the console connected and the wiring corrected, the reply word read back as
+// 0x8DFD9DFD. That is the exact bit-complement of 0x72026202 — the textbook multiboot sync
+// reply: 0x7202 recognition in the high half, 0x6202 echo of what we sent in the low half.
+// Both halves complement exactly, which is not a coincidence available to noise.
+//
+// Two earlier pieces of "evidence" said NORMAL, and both were flawed:
+//   1. The scope check (2026-09-03) drove Pulse Out 2 into Pulse In 1 through a patch cable
+//      and probed BOTH JACKS. Of course they tracked — a patch cable is a wire. That
+//      measurement never saw the pad, so it said nothing about the input stage at all.
+//   2. The loopback passing bit-exact only proves MOSI-inversion XOR MISO-inversion == 0,
+//      never either alone (documented as its blind spot from the start). It stayed consistent
+//      because driving the transistor input from our own ~6 V output is not the same
+//      operating point as the GBA driving it at 3.3 V — the loopback and the real link can
+//      genuinely differ here, which is why the console's own answer is the one that counts.
 //
 // SCK: CPOL=1 wants SCK inverted, and the Workshop output stage already inverts Pulse Out 1;
 // the two cancel => NORMAL. Confirmed on the scope: with the SM stalled on `side 0`, the SC
@@ -51,7 +61,7 @@ uint32_t gba_spi_xfer32(uint32_t w);
 // MOSI: Workshop output stage inverts Pulse Out 2 once => INVERT.
 #define GBA_SCK_OUTOVER   GPIO_OVERRIDE_NORMAL
 #define GBA_MOSI_OUTOVER  GPIO_OVERRIDE_INVERT
-#define GBA_MISO_INOVER   GPIO_OVERRIDE_NORMAL
+#define GBA_MISO_INOVER   GPIO_OVERRIDE_INVERT
 
 // PIO cycles consumed per SPI bit, per program. Both programs are 4 cycles/bit:
 //   gba_spi       : out(1) + mov[1](2) + in(1)   = 4

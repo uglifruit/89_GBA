@@ -90,74 +90,67 @@ ever latching in `linkcheck` tests 2 and 3. We were listening on the GBA's input
 
 ---
 
-## ⇢ CURRENT FRONT LINE (2026-09-06, evening)
+## 🎉 BREAKTHROUGH (2026-09-06, night): THE LINK WORKS — the data was inverted
 
-### What is now PROVEN
+`linkcheck` TEST 3 with the corrected wiring, word readout:
 
-* **The swap was right.** `cablecheck` MODE 0 shows the bursty activity on **LED0 (Pulse In
-  1)** — the pattern that was on LED1 before the swap. The GBA's SO arrives where we listen.
-* **The console is alive and signalling ready.** `cablecheck` MODE 2, with no clocking at
-  all, shows Pulse In 1 **LOW** — GBATEK's *"Wait for SI to become LOW (slave ready)"*.
-* **SC toggles** at the Workshop end (MODE 3).
+```
+LED4 bright (high half):  0001 1011 1111 1011  ->  8 D F D
+LED4 dim    (low half):   1001 1011 1111 1011  ->  9 D F D
+                                    word = 0x8DFD9DFD
+```
 
-### CORRECTION: the `0x0000` theory was wrong
+Invert every bit:
 
-An earlier version of this section argued that `0x0000` was GBATEK's documented
-*"slave entered correct mode"* reply and that our sync loop was discarding a good answer.
-**That was a misreading.** GBATEK's `6200`/`0000`/`610y`/`720x` table lists **16-bit** words —
-and SIO *normal* mode only has 8-bit and 32-bit (SIOCNT bit 12). That table describes the
-**multi-play** multiboot variant, which is a different protocol on a different electrical
-topology.
+| Read back | Complement | Meaning |
+|---|---|---|
+| `0x8DFD` | **`0x7202`** | multiboot **RECOGNITION** |
+| `0x9DFD` | **`0x6202`** | **ECHO** of exactly what we sent |
 
-Our applet uses **normal 32-bit** mode with `0x6202` → `0x7202`, which is what the
-microcontroller/PC reference uploaders use, and that remains correct.
+`0x8DFD9DFD` is the exact bit-complement of `0x72026202` — the textbook multiboot sync reply,
+both halves. Noise does not produce the precise complement of the expected word.
 
-`handshake.uf2` MODE 0 confirmed the correction empirically: it reached "saw `0x0000`" and
-"saw `0xFFFF`" but **never `0x72xx`**, in either the GBATEK or the reference sequence. The
-mixture of `0x0000`, occasional non-zero and occasional `0xFFFF` halves is a line drifting
-between states — the console's own asynchronous polling leaking into our sample windows —
-not a slave shifting data in step with our clock.
+**The GBA has been answering correctly all along. We were reading it inverted.**
 
-### THE THING THAT HAS NEVER ACTUALLY BEEN TESTED
+### The fix
 
-**Every variant sweep so far ran with the wrong wiring.** TEST 3 was run before the swap, when
-Pulse In 1 was connected to the GBA's *input* pin. Those sweeps could not have succeeded
-regardless of timing, so they proved nothing about the sample point.
+`GBA_MISO_INOVER` is now `GPIO_OVERRIDE_INVERT` in `../gba_spi.h`. Everything is rebuilt.
 
-**Run `linkcheck.uf2` TEST 3 now, with the corrected wiring.** It is the first meaningful
-sweep of the project.
+### Why the earlier "measurements" said NORMAL — both were flawed
 
-1. Flash `linkcheck.uf2`, click to **TEST 3** (LED4 on, LED5 on).
-2. Power-cycle the **GBA** with the Computer already running, and let it settle on the logo.
-3. **Leave it for a full 60 seconds** — one pass over all 50 slots is ~35 s.
-4. Watch LED0 (echo) and LED1 (sync) the whole time; both latch and pulse, so anything that
-   ever worked stays visible.
-5. Then hold UP ~1 s and read the word out. It now shows the **richest** word seen, not the
-   last one.
+1. **The scope check (2026-09-03) proved nothing.** It drove Pulse Out 2 into Pulse In 1
+   through a patch cable and probed **both jacks**. They tracked because *a patch cable is a
+   wire*. The probe never saw the pad, so it never observed the input stage at all. This was
+   presented as decisive at the time; it was not.
+2. **The loopback only ever proved MOSI-inversion XOR MISO-inversion == 0** — its documented
+   blind spot from the very beginning. It could never distinguish a matched pair of errors,
+   which is exactly what we had.
 
-### If the sweep still finds nothing: verify SC actually ARRIVES
+The console's own reply outranks both. It is the only test that exercises the real input
+stage at the real drive level: our ~6 V output driving the transistor input is a different
+operating point from the GBA driving it at 3.3 V, so the loopback and the live link can
+genuinely disagree here.
 
-This is the last unverified link in the chain. We have confirmed SC toggles at the *Workshop*
-jack; we have never confirmed it arrives *at the console*. A GBA that is ready but never
-clocked behaves exactly as observed: SO parked at its inactive level, with its own periodic
-polling as the only activity.
+### Retest now
 
-Symptom that supports this: `cablecheck` MODE 0 clocks **continuously**, yet the activity on
-Pulse In 1 arrives in **bursts with quiet gaps**. A slave shifting in response to our clock
-would produce continuous activity. Bursts on the console's own schedule suggest it is not
-seeing our clock at all.
+1. Flash the rebuilt **`linkcheck.uf2`**.
+2. Knobs: **X fully CCW** (variant 0, GBATEK canonical), **Y fully CCW** (normal SCK
+   polarity), **Main fully CCW** (~1 kHz).
+3. Click to **TEST 2** (LED4 on, LED5 off).
+4. Power-cycle the **GBA** with the Computer already running; settle on the logo.
 
-With the scope, on the GBA side of the 1 kΩ:
+**Expect LED0 (echo) and LED1 (sync) to light.** If they do, the transport is finished and the
+next step is the real multiboot upload with the rebuilt `gba_link.uf2`.
 
-* `cablecheck` MODE 3 gives a slow ~2 Hz square — easy to catch.
-* Check it **reaches a valid logic high** at the console end. The 1 kΩ into the GBA's clamp
-  diode should leave ~3.9 V; if it is sagging toward 1–2 V, the resistor is too large for
-  what the input is doing. **Try 470 Ω, or a direct link**: GBATEK's own Xboo PC→GBA multiboot
-  cable drives the GBA's inputs from a 5 V parallel port with **no series resistor at all**
-  ("the general connection is very simple, only needs four wires"), so a direct connection is
-  what the reference design actually does.
-* Also check SI (Pulse Out 2's wire) the same way, in `cablecheck` MODE 1, which drives it
-  with a slow pattern.
+If TEST 2 is still dark, run TEST 3 and read the word again — if it now reads `0x72026202`
+directly, the polarity is right and only the sync-loop logic needs attention.
+
+### Expect the loopback test to FAIL now
+
+`linkcheck` TEST 1 and `bringup` stage 2 will likely stop passing, because the MOSI/MISO
+inversions no longer cancel for a jack-to-jack patch cable. **That is expected and is not a
+regression** — the loopback was self-consistent and wrong. Judge the system by the console,
+not by the loopback, from here on.
 
 ---
 

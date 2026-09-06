@@ -124,6 +124,23 @@ already clocking when it powers up. Power-cycle the *GBA* (not the Computer) to 
   low-16, so sending 0x00006202 returns 0x????6202. That echo is a loopback *through the GBA*
   and confirms bit timing independent of recognition (upper 16 = 0x7202).
 
+## SUPERSEDED — MISO polarity is **INVERT** (settled by the GBA, 2026-09-06)
+
+The section below concluded NORMAL from a scope check. **That conclusion was wrong, and the
+measurement behind it was invalid.** It drove Pulse Out 2 into Pulse In 1 through a patch
+cable and probed *both jacks* — which track each other because a patch cable is a wire. The
+probe never saw the pad, so it never observed the input stage.
+
+The GBA settled it: with the wiring corrected, the reply read `0x8DFD9DFD`, the exact
+bit-complement of `0x72026202` — `0x7202` recognition and `0x6202` echo. `GBA_MISO_INOVER` is
+now `GPIO_OVERRIDE_INVERT`.
+
+Note also that **the loopback passing never contradicted this**: it only ever proved
+MOSI-inversion XOR MISO-inversion == 0, its blind spot from day one, so a matched pair of
+errors sailed through. Expect the loopback to fail now; that is correct, not a regression.
+
+<details><summary>Original (wrong) 2026-09-03 conclusion, kept for the record</summary>
+
 ## RESOLVED: MISO polarity is NORMAL (scope-measured 2026-09-03)
 
 Was an open contradiction — the applet said `INVERT`, both diagnostics said `NORMAL`, and
@@ -140,6 +157,8 @@ why the diagnostics were the only thing ever returning structured bits from a re
 
 All four sites now read the single constants in `../gba_spi.h` (`GBA_SCK_OUTOVER`,
 `GBA_MOSI_OUTOVER`, `GBA_MISO_INOVER`), so they cannot silently disagree again.
+
+</details>
 
 ## Diagnostics in this folder
 
