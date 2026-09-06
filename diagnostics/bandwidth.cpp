@@ -232,11 +232,9 @@ static void core1_entry()
         gba_spi_set_clock(16'000);
         enterBench();
 
-        // Prove the echo path works BEFORE trusting any sweep. Without this, "every rate
-        // failed" and "the test never ran" both read as zero and cannot be told apart —
-        // which is exactly the ambiguity that wasted a bench cycle. Run it at the rate
-        // multiboot just succeeded at, which is known good.
-        gB.benchOk = (testRate(64, 0) == 0);
+        // benchOk is maintained continuously by the keep-alive below, which re-asserts the
+        // enter word every idle poll and reads the echo back. LED2 therefore tracks the live
+        // state rather than a single measurement taken once at boot.
 
         // Service run requests from core 0 until the link is lost.
         uint8_t lastMode = 0xFF;
@@ -269,11 +267,21 @@ static void core1_entry()
                     gba_spi_set_clock(gB.mbHz ? gB.mbHz : 50'000);
                 }
             }
-            // Idle keep-alive so the payload stays in bench mode and we notice a dropped link.
-            uint32_t k = gba_spi_xfer32(0xBE7D0000u);
-            if ((k >> 16) != kTag) {
-                if (++lostRun_ > 200) { lostRun_ = 0; break; }   // link gone: re-multiboot
-            } else lostRun_ = 0;
+            // The idle keep-alive IS the bench-enter word. Sending the burst once at boot
+            // gave the payload a ~96 ms window and no second chance: BE7D0000 was then the
+            // only word it ever saw again, which is exactly what Andy observed on screen.
+            // Re-asserting it every idle poll means entry cannot be missed, and the reply
+            // tells us the answer for free: in bench mode the payload echoes the low half,
+            // so 0xBE7C coming back is positive confirmation rather than an assumption.
+            if (gB.mode != 3) {
+                uint32_t k = gba_spi_xfer32(kBenchEnter);
+                if ((k >> 16) != kTag) {
+                    if (++lostRun_ > 200) { lostRun_ = 0; break; }   // link gone: re-multiboot
+                } else {
+                    lostRun_ = 0;
+                    gB.benchOk = ((uint16_t)(k & 0xFFFF) == (uint16_t)(kBenchEnter & 0xFFFF));
+                }
+            }
             sleep_ms(2);
         }
     }

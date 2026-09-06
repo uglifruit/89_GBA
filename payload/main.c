@@ -147,7 +147,13 @@ static uint16_t g_buttons = 0;
 // indistinguishable from "the magic word was never recognised".
 static volatile int g_bench = 0;
 static volatile int g_benchDirty = 1;   // screen needs repainting for the current mode
-static volatile int g_enterHits = 0;    // shown on screen: proof the compare actually fires
+// AUTO-ANALYSIS of the incoming stream. Reading a flickering hex line and guessing what it
+// said has now misled this investigation twice, so the payload classifies every word itself
+// and shows running totals. Totals cannot flicker: they only ever count up.
+static volatile int      g_enterHits = 0;   // words exactly == BENCH_ENTER
+static volatile int      g_nearHits  = 0;   // words within 4 bits of BENCH_ENTER (corruption)
+static volatile int      g_be7cHits  = 0;   // words whose TOP half is 0xBE7C (partial match)
+static volatile uint32_t g_lastBe7c  = 0;   // the most recent such word, whatever it was
 
 static void service(void)
 {
@@ -164,6 +170,17 @@ static void service(void)
         // 0xBE7CBE7C simultaneously. Trade that theoretical safety for something that works.
         if (got == BENCH_ENTER) { g_enterHits++; if (!g_bench) { g_bench = 1; g_benchDirty = 1; } }
         if (got == BENCH_LEAVE) { if (g_bench) { g_bench = 0; g_benchDirty = 1; } }
+
+        // Classify near-misses. If the burst is arriving but mangled, an exact compare can
+        // never show it — the word would just look like noise. Counting how many bits differ
+        // separates "arriving corrupted" from "never arriving", which need opposite fixes.
+        {
+            uint32_t diff = got ^ BENCH_ENTER;
+            int bits = 0;
+            for (int b = 0; b < 32; b++) if (diff & (1u << b)) bits++;
+            if (bits > 0 && bits <= 4) g_nearHits++;
+            if ((got >> 16) == 0xBE7Cu) { g_be7cHits++; g_lastBe7c = got; }
+        }
 
         REG_SIODATA32 = g_bench ? ((0x600Du << 16) | (got & 0xFFFFu))   // echo
                                 : ((0x600Du << 16) | g_buttons);        // normal reply
@@ -235,21 +252,26 @@ int main(void)
         // GBA is not receiving anything" look identical from the bench. With it you can read
         // straight off the screen whether BE7CBE7C is arriving intact.
         {
-            // HOLD the value for ~0.5 s. Updating every frame made it change far too fast to
-            // read, so what it showed could only be guessed at — and a guess is exactly what
-            // must not be fed back into a diagnosis.
+            // ── AUTO-ANALYSIS PANEL ──────────────────────────────────────────────────────
+            // Everything here is derived by the payload, not by eye. The held value updates
+            // twice a second so it can actually be read; the counts never flicker.
             static uint32_t held = 0; static int holdN = 0;
             if (++holdN >= 30) { holdN = 0; held = params; }
-            char buf[9];
-            hex32(buf, held);
-            srect(0, 36, SCREEN_W, 9, COL_BG);
-            text(60, 36, buf, COL_HEX, 1);
-            // How many times the BENCH_ENTER compare has actually matched. If the hex line
-            // reads BE7CBE7C and this stays 00, the comparison itself is not firing and the
-            // fault is nowhere near the link.
-            char hits[9];
-            hex32(hits, (uint32_t)g_enterHits);
-            text(150, 36, hits + 6, COL_HEX, 1);
+            char b[9];
+
+            srect(0, 36, SCREEN_W, 26, COL_BG);
+
+            hex32(b, held);        text( 6, 36, "RX",  COL_DIM, 1);
+                                   text(28, 36, b,     COL_HEX, 1);
+            hex32(b, g_lastBe7c);  text(120, 36, "BE7C", COL_DIM, 1);
+                                   text(156, 36, b + 4, COL_HEX, 1);
+
+            hex32(b, (uint32_t)g_enterHits);
+            text(  6, 46, "EXACT", COL_DIM, 1); text( 46, 46, b + 4, COL_OK,   1);
+            hex32(b, (uint32_t)g_nearHits);
+            text( 84, 46, "NEAR",  COL_DIM, 1); text(118, 46, b + 4, COL_WAIT, 1);
+            hex32(b, (uint32_t)g_be7cHits);
+            text(150, 46, "TOP",   COL_DIM, 1); text(178, 46, b + 4, COL_HEX,  1);
         }
 
         // Activity pip: steps across on every received word, so liveness is visible even if
