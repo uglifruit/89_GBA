@@ -69,6 +69,27 @@ be detected with **no transfer at all**, so it is independent of every timing qu
 
 ---
 
+## ✅ RESULT (2026-09-06): THE CABLE IS **CROSSED**
+
+STEP 1 has been run and answered. `cablecheck` MODE 0, GBA settled on the logo:
+
+* **LED0 (Pulse In 1 = the SO-labelled wire): no activity.** That wire reaches the GBA's
+  *input*, so it is high-Z and sits on our pull-up.
+* **LED1 (Pulse In 2 = the SI-labelled wire): activity, in periodic bursts** — on for ~3
+  blinks, off for ~6, repeating.
+
+The burst pattern is what makes it conclusive. We clock SC *continuously* in MODE 0, so
+crosstalk from our own clock would show as *continuous* activity. Bursts on the console's own
+schedule are the BIOS multiboot-wait loop. That is a real GBA driving a real line.
+
+**So the breakout labels are the wrong way round: the wire marked SI actually carries the
+GBA's SO.** This explains every earlier symptom — the `0x00000000` word readout and nothing
+ever latching in `linkcheck` tests 2 and 3. We were listening on the GBA's input.
+
+**Go to STEP 2B.** STEP 1 below is kept for reference / re-testing after any rewire.
+
+---
+
 ## STEP 1 — `cablecheck.uf2`, MODE 0. Which wire carries the GBA's data?
 
 **Do this first.** It is the only step that resolves a hardware unknown, and every later step
@@ -158,6 +179,14 @@ behaviour, not by the label.** SC and GND do not move.
 | labelled **SO** | Pulse In 1 | **Pulse Out 2**, via 1 kΩ | it really reaches the GBA's SI — we drive |
 | **SC** | Pulse Out 1 | unchanged, via 1 kΩ | |
 | **GND** | Computer GND | unchanged | |
+
+**Move the 1 kΩ resistor too.** It was on the SI-labelled wire while that went to Pulse
+Out 2. After the swap that wire goes to an *input*, so it must have **no series resistor** —
+series resistance fights the pull-up that biases the transistor input stage. The resistor
+belongs on the SO-labelled wire instead, which is now the driven one.
+
+Final state: 1 kΩ on **SC** and on the **SO-labelled** wire (the two we drive). Nothing in
+series with the **SI-labelled** wire (the one we listen to).
 
 **Relabel the breakout now** so you never have to remember this again.
 

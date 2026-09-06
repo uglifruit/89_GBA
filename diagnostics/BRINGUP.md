@@ -31,6 +31,21 @@ Three bugs were found and fixed as a result (commit `08fb83f`):
 fault. The SM stalls on `side 0` (pad low) and Pulse Out 1 inverts in hardware. Don't chase
 it again.
 
+### THE CABLE IS CROSSED (settled 2026-09-06)
+
+Measured with `cablecheck` MODE 0, which listens on Pulse In 1 and Pulse In 2 simultaneously.
+With the GBA settled on the logo screen, only **Pulse In 2** showed activity, and it arrived
+in **periodic bursts** — the BIOS multiboot-wait loop. (Crosstalk from our own SC clocking
+would have been continuous, since MODE 0 clocks continuously; the bursts rule it out.)
+
+So this link cable swaps SO/SI between its ends, and the breakout labels were reversed. Wire
+by behaviour: the **SI-labelled** wire goes to **Pulse In 1** (it carries the GBA's SO) and
+the **SO-labelled** wire goes to **Pulse Out 2** via 1 kΩ (it reaches the GBA's SI). SC and
+GND do not move, and no firmware change is needed — the swap is in copper.
+
+This retro-explains the whole 2026-09-03/04 session: the `0x00000000` word readout and the
+dead LEDs in `linkcheck` tests 2 and 3 were us listening on the GBA's *input* pin.
+
 ### The cable that worked
 
 A point-to-point GBA link cable into a bought GBA link socket, with **SI, SO, SC and GND**
