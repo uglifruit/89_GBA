@@ -91,6 +91,14 @@ static void text_centre(int y, const char *s, uint16_t color, int scale)
     text((SCREEN_W - text_width(s, scale)) / 2, y, s, color, scale);
 }
 
+// Render a 32-bit value as 8 hex digits. Freestanding build: no libc, so do it by hand.
+static void hex32(char *out, uint32_t v)
+{
+    static const char H[] = "0123456789ABCDEF";
+    for (int i = 0; i < 8; i++) out[i] = H[(v >> (28 - 4 * i)) & 0xF];
+    out[8] = 0;
+}
+
 static uint16_t read_buttons(void)
 {
     // REG_KEYINPUT is active-LOW (0 = pressed); invert and mask to the 10 valid key bits so
@@ -218,6 +226,17 @@ int main(void)
         text_centre(DYN_Y, linkUp ? "LINK OK" : "WAITING FOR HOST",
                     linkUp ? COL_OK : COL_WAIT, 1);
         service();
+
+        // THE LAST WORD RECEIVED, in hex. This is the payload's equivalent of the host's
+        // nibble readout: without it, "the GBA is not recognising the magic word" and "the
+        // GBA is not receiving anything" look identical from the bench. With it you can read
+        // straight off the screen whether BE7CBE7C is arriving intact.
+        {
+            char buf[9];
+            hex32(buf, params);
+            srect(0, 36, SCREEN_W, 9, COL_BG);
+            text_centre(36, buf, COL_DIM, 1);
+        }
 
         // Activity pip: steps across on every received word, so liveness is visible even if
         // the params themselves are wrong.

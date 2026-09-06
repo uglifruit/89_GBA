@@ -225,6 +225,11 @@ static void core1_entry()
 
         gB.linkUp = true;
         sleep_ms(100);            // let the payload reach its loop
+
+        // Drop to a conservative rate for the handshake. Multiboot succeeding at 200 kHz does
+        // NOT mean the post-boot link is reliable there: multiboot verifies every word and
+        // waits 300 us between them, while this link does neither.
+        gba_spi_set_clock(16'000);
         enterBench();
 
         // Prove the echo path works BEFORE trusting any sweep. Without this, "every rate
