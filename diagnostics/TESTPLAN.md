@@ -90,6 +90,61 @@ ever latching in `linkcheck` tests 2 and 3. We were listening on the GBA's input
 
 ---
 
+## ⇢ CURRENT FRONT LINE (2026-09-06, later): run `handshake.uf2` MODE 0
+
+The swap worked and the console is provably alive:
+
+* `cablecheck` MODE 0 now shows the bursty activity on **LED0 (Pulse In 1)** — the same
+  pattern that was on LED1 before the swap. The GBA's SO arrives where we listen. ✅
+* `cablecheck` MODE 2, with **no clocking at all**, shows **Pulse In 1 sitting LOW**. That is
+  GBATEK's master-init condition, *"Wait for SI to become LOW (slave ready)"* — **the console
+  is signalling that it is ready.** ✅
+* `cablecheck` MODE 3 confirms SC toggling and reaching the line. ✅
+
+But `linkcheck` kept returning `0x00000000`, which we had been reading as "dead line".
+
+**It may not be dead.** GBATEK's multiboot table:
+
+```
+15x   6200   FFFF     Slave not in multiplay/normal mode yet
+1     6200   0000     Slave entered correct mode now
+1     610y   720x     Recognition okay, exchange master/slave info
+```
+
+**`0x0000` is a documented, correct reply** — "slave entered correct mode" — and it comes in
+response to **`0x6200`**. Our applet and every diagnostic so far send **`0x6202`** and spin
+waiting for `0x7202`, never sending `0x6200` and never treating `0x0000` as progress. If the
+console has been answering correctly, we have been discarding the answer.
+
+`handshake.uf2` tests exactly that: it walks the GBATEK sequence as a state machine and
+latches an LED per stage reached, so you can see where it stalls.
+
+| LED | Stage reached (all latch; solid = now, pulsing = earlier) |
+|---|---|
+| **LED0** | any non-zero, non-`0xFFFFFFFF` reply — the link carries something |
+| **LED1** | saw `0xFFFF` — slave present, not yet in the right mode |
+| **LED2** | saw `0x0000` to `0x6200` — **slave entered correct mode** |
+| **LED3** | saw `0x72xx` — **RECOGNITION. The one that matters.** |
+
+Modes: **0 = GBATEK sequence (start here)**, 1 = the current reference sequence for
+comparison, 2 = GBATEK at ~1 kHz, 3 = alternates between the two every ~4 s.
+
+Hold UP ~1 s for the word readout of the most informative word seen.
+
+**What each outcome means:**
+
+* **LED3 lights** — recognition. The handshake works and the applet's sync loop needs
+  rewriting to GBATEK's sequence.
+* **LED2 but never LED3** — the console reaches "correct mode" but never recognises us.
+  Suspect our SI (transmit) data not arriving: meter Pulse Out 2's wire in `cablecheck`
+  MODE 1, which drives it with a slow pattern.
+* **LED1 only** — slave present but never enters the right mode. Power-cycle the GBA with
+  the Computer already clocking.
+* **LED0 only, or nothing** — back to the transport: try MODE 2 (slow), then `linkcheck`
+  TEST 3's variant sweep.
+
+---
+
 ## STEP 1 — `cablecheck.uf2`, MODE 0. Which wire carries the GBA's data?
 
 **Do this first.** It is the only step that resolves a hardware unknown, and every later step
