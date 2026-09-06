@@ -137,7 +137,7 @@ private:
         // still be read out after switching away from the test that produced it.
         echoLatch_ = syncLatch_ = structLatch_ = false;
         misoSeenHigh_ = misoSeenLow_ = false;
-        cnt_ = 0; busy_ = false; stall_ = 0; stalls_ = 0; sweepSlot_ = 0; sweepTick_ = 0; bestSlot_ = 0; bestScore_ = 0;
+        cnt_ = 0; busy_ = false; stall_ = 0; stalls_ = 0; richEdges_ = 0; richWord_ = 0; sweepSlot_ = 0; sweepTick_ = 0; bestSlot_ = 0; bestScore_ = 0;
 
         if (test_ == 0) {
             // Idle test drives nothing: hand the pins back to plain SIO inputs so we can
@@ -268,6 +268,12 @@ private:
         if (!busy_ || pio_sm_is_rx_fifo_empty(GBA_PIO, GBA_SM)) return false;
         *out = pio_sm_get(GBA_PIO, GBA_SM);
         lastWord_ = *out;
+        // Keep the most INFORMATIVE word seen, not merely the most recent. A sweep that ends
+        // on a dead slot was overwriting real evidence with 0x00000000, so the word readout
+        // showed all-zeros even after a structured reply had been captured earlier.
+        uint32_t e = *out ^ (*out >> 1);
+        uint32_t n = (uint32_t)__builtin_popcount(e & 0x7FFFFFFFu);
+        if (n > richEdges_) { richEdges_ = n; richWord_ = *out; }
         busy_ = false;
         return true;
     }
@@ -403,7 +409,11 @@ private:
         bool gap = (roTick_ > 50000);
         // In the sweep, read out the WINNING word (and its slot) rather than whatever the
         // sweep happened to be trying when you pressed the switch.
-        uint32_t w = (test_ == 3 && bestScore_ > 0) ? bestWord_ : lastWord_;
+        // Priority: a scoring word from the sweep > the richest word ever seen > the last
+        // word. So the readout always shows the best evidence available.
+        uint32_t w = (test_ == 3 && bestScore_ > 0) ? bestWord_
+                   : (richEdges_ >= 3)              ? richWord_
+                                                    : lastWord_;
         uint32_t nib = (roIdx_ == 0 && test_ == 3 && bestScore_ > 0)
                      ? (uint32_t)(bestSlot_ & 0xF)        // first nibble = winning slot & 15
                      : (w >> (28 - 4 * roIdx_)) & 0xF;
@@ -455,7 +465,7 @@ private:
     uint32_t tick_ = 0, cnt_ = 0, knobTick_ = 0, upHeld_ = 0;
     uint32_t sweepTick_ = 0, roTick_ = 0;
     uint32_t curRate_ = 25000;
-    uint32_t lastWord_ = 0, bestWord_ = 0;
+    uint32_t lastWord_ = 0, bestWord_ = 0, richWord_ = 0, richEdges_ = 0;
     int  test_ = 0, sweepSlot_ = 0, bestSlot_ = 0, bestScore_ = 0, roIdx_ = 0;
     bool pioLoaded_ = false, busy_ = false, sckInv_ = false;
     int  progIdx_ = 0;
