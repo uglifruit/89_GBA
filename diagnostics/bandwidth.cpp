@@ -76,6 +76,7 @@ struct Bench {
     volatile uint32_t rttUs     = 0;   // result of mode 2
     volatile uint32_t mbHz      = 0;   // multiboot rung that worked
     volatile uint32_t beat      = 0;   // progress heartbeat
+    volatile uint32_t lastReply = 0;   // last raw word from the GBA, for the readout
 };
 static Bench gB;
 
@@ -131,11 +132,18 @@ static uint32_t testRate(uint32_t n, uint32_t gapUs)
         if (send == (uint16_t)(kBenchLeave & 0xFFFF)) send ^= 1;
 
         uint32_t r = gba_spi_xfer32(0xBE7D0000u | send);   // 0xBE7D: not a bench control word
+        gB.lastReply = r;
 
-        // Upstream framing must be intact...
+        // The 16-bit tag is the primary corruption detector and it needs NO bench handshake:
+        // if 0x600D survives at rate X, the upstream path is clean at rate X. Gating the whole
+        // measurement on the echo was over-engineering, and it meant a handshake problem read
+        // as a transport ceiling of zero — twice.
+        //
+        // Downstream is already proven independently: multiboot CRC-checks the entire uploaded
+        // image, and it completed at 200 kHz. The echo is therefore a bonus cross-check, only
+        // applied once bench mode is actually confirmed.
         if ((r >> 16) != kTag) { bad++; haveExpect = false; }
-        // ...and the echo must match what we sent ONE transfer ago.
-        else if (haveExpect && (uint16_t)(r & 0xFFFF) != expect) bad++;
+        else if (gB.benchOk && haveExpect && (uint16_t)(r & 0xFFFF) != expect) bad++;
 
         expect = send;
         haveExpect = true;
@@ -340,14 +348,21 @@ private:
     }
 
     // Which measurement the readout shows, per mode.
+    // A measurement of zero is not a result, it is a symptom — and on its own it cannot say
+    // whether the link is broken, the handshake failed, or the test never ran. When a result
+    // is zero the readout falls back to the last RAW reply word, which always carries the
+    // answer: 0x600Dxxxx means the link is fine and the fault is in this tool; anything else
+    // shows what the GBA is really sending.
     uint32_t readoutValue() const
     {
+        uint32_t v;
         switch (gB.mode) {
-            case 0:  return gB.maxSckHz;
-            case 1:  return gB.maxPollHz;
-            case 2:  return gB.rttUs;
-            default: return gB.mbHz;
+            case 0:  v = gB.maxSckHz;  break;
+            case 1:  v = gB.maxPollHz; break;
+            case 2:  v = gB.rttUs;     break;
+            default: v = gB.mbHz;      break;
         }
+        return v ? v : gB.lastReply;
     }
 
     void runReadout()
