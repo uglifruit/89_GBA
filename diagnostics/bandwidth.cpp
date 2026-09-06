@@ -28,12 +28,13 @@
 // ─────────────────────────────────────────────────────────────────────────────────────────
 // LED4 + LED5 = MODE in binary (LED4 = bit1, LED5 = bit0), as in every other tool here.
 //
-// SWITCH: DOWN is the only control that changes anything.
-//   * DOWN click, test not yet run  -> RUN the current mode's test (LED0 pulses while busy)
-//   * DOWN click, test finished     -> advance to the next mode
-//   * UP held ~1 s                  -> toggle the word readout. UP does nothing else: it must
-//                                      not change mode, or reaching for the readout would
-//                                      move you off the result you wanted to read.
+// SWITCH:
+//   * DOWN click     -> advance to the next mode. ARRIVING IN A MODE RUNS ITS TEST; LED0
+//                       pulses while it works and LED3 lights when it is finished. To re-run
+//                       a test, click all the way round to it again.
+//   * UP held ~1 s   -> toggle the word readout, showing the current mode's number.
+//                       UP does nothing else - it must not change mode, or reaching for the
+//                       readout would move you off the result you wanted to read.
 //
 //   MODE 0 — SCK CEILING     (LED4 off, LED5 off)
 //   MODE 1 — POLL CEILING    (LED4 off, LED5 ON )
@@ -41,7 +42,11 @@
 //   MODE 3 — REPORT          (LED4 ON,  LED5 ON )
 //
 // While a test runs: LED0 pulses as a progress heartbeat, LED3 lights when the test finishes.
-// LED1 = link is up (multiboot done). LED2 = errors seen at the rate currently being tried.
+// LED1 = link is up (multiboot done).
+// LED2 = BENCH ECHO VERIFIED. This one matters: it is checked once, right after multiboot, at
+//        the rate multiboot itself just succeeded at. If LED2 is DARK then the GBA is not
+//        echoing and every sweep result will be zero for a reason that has nothing to do with
+//        the rates being tested — check the payload is the current build.
 //
 // WORD READOUT (hold UP ~1 s): eight nibbles, most significant first, LED0..3 = the nibble in
 // binary, LED4 bright for the top half / dim for the bottom, LED5 blinks between nibbles.
@@ -61,11 +66,10 @@
 // Same discipline as GbaShared: one writer per field, volatile, nothing wider than a word.
 struct Bench {
     volatile uint8_t  mode      = 0;   // written by core 0 (switch), read by core 1
-    volatile uint8_t  runReq    = 0;   // core 0 bumps this to (re)start the current mode
     volatile bool     linkUp    = false;
     volatile bool     busy      = false;
     volatile bool     done      = false;
-    volatile bool     errNow    = false;
+    volatile bool     benchOk   = false; // the echo path itself is verified working
     volatile uint32_t curHz     = 0;   // rate currently under test
     volatile uint32_t maxSckHz  = 0;   // result of mode 0
     volatile uint32_t maxPollHz = 0;   // result of mode 1
@@ -99,6 +103,17 @@ static void enterBench()
 static void leaveBench()
 {
     for (int i = 0; i < 8; i++) { gba_spi_xfer32(kBenchLeave); sleep_us(200); }
+}
+
+// How many words to exchange at a given rate. A fixed count made the 1 kHz rung take
+// ~13 s (400 words x 32 ms), long enough that it looked hung. Scale it so every rung costs
+// roughly the same wall-clock time.
+static uint32_t wordsFor(uint32_t hz)
+{
+    uint32_t n = hz / 500;
+    if (n < 32)  n = 32;
+    if (n > 400) n = 400;
+    return n;
 }
 
 // Run `n` echo exchanges at the current clock and return how many came back wrong.
@@ -140,10 +155,8 @@ static void modeSck()
         // A short warm-up first: the very first word after a clock change can be ragged and
         // should not condemn an otherwise good rate.
         testRate(16, 0);
-        uint32_t bad = testRate(400, 0);
-        gB.errNow = (bad != 0);
-        if (bad == 0) best = kRates[i];
-        else break;            // once it breaks it stays broken; no point climbing further
+        uint32_t bad = testRate(wordsFor(kRates[i]), 0);
+        if (bad == 0) best = kRates[i];   // keep going: test every rate independently
     }
     gB.maxSckHz = best;
 }
@@ -164,7 +177,6 @@ static void modePoll()
         uint32_t t0 = time_us_32();
         uint32_t bad = testRate(300, g);
         uint32_t dt  = time_us_32() - t0;
-        gB.errNow = (bad != 0);
         if (bad == 0 && dt) bestHz = (300u * 1'000'000u) / dt;
         else break;
     }
@@ -214,8 +226,13 @@ static void core1_entry()
         sleep_ms(100);            // let the payload reach its loop
         enterBench();
 
+        // Prove the echo path works BEFORE trusting any sweep. Without this, "every rate
+        // failed" and "the test never ran" both read as zero and cannot be told apart —
+        // which is exactly the ambiguity that wasted a bench cycle. Run it at the rate
+        // multiboot just succeeded at, which is known good.
+        gB.benchOk = (testRate(64, 0) == 0);
+
         // Service run requests from core 0 until the link is lost.
-        uint8_t lastReq = 0;
         uint8_t lastMode = 0xFF;
         for (;;) {
             // MODE 3 is the report screen, so hand the GBA back its normal UI while you read
@@ -225,19 +242,26 @@ static void core1_entry()
                 if (m == 3)                     leaveBench();
                 else if (lastMode == 3)         enterBench();
                 lastMode = m;
-            }
 
-            uint8_t req = gB.runReq;
-            if (req != lastReq) {
-                lastReq = req;
-                gB.busy = true; gB.done = false; gB.errNow = false;
-                switch (gB.mode) {
-                    case 0: modeSck();  break;
-                    case 1: modePoll(); break;
-                    case 2: modeRtt();  break;
-                    default: break;                     // mode 3 is display-only
+                // Entering a mode RUNS it. DOWN used to mean "run" or "advance" depending
+                // on whether the test had finished — one button with two meanings gated on
+                // state you cannot see. Now DOWN only ever advances, and arriving somewhere
+                // is what starts the work.
+                if (m < 3) {
+                    gB.busy = true; gB.done = false;
+                    switch (m) {
+                        case 0: modeSck();  break;
+                        case 1: modePoll(); break;
+                        case 2: modeRtt();  break;
+                    }
+                    gB.busy = false; gB.done = true;
+
+                    // Put the clock back to a rate we KNOW works before resuming the
+                    // keep-alive. modeSck() leaves it wherever the sweep stopped, which is by
+                    // definition a failing rate, and the keep-alive would then decide the
+                    // link had dropped and pointlessly re-run multiboot.
+                    gba_spi_set_clock(gB.mbHz ? gB.mbHz : 50'000);
                 }
-                gB.busy = false; gB.done = true;
             }
             // Idle keep-alive so the payload stays in bench mode and we notice a dropped link.
             uint32_t k = gba_spi_xfer32(0xBE7D0000u);
@@ -263,7 +287,7 @@ public:
 
         LedOn(0, gB.busy && ((tick_ >> 11) & 1));   // progress heartbeat
         LedOn(1, gB.linkUp);
-        LedOn(2, gB.errNow);
+        LedOn(2, gB.benchOk);
         LedOn(3, gB.done);
         LedOn(4, (gB.mode >> 1) & 1);
         LedOn(5, gB.mode & 1);
@@ -279,12 +303,7 @@ private:
         if (sw != lastSw_) {
             if (lastSw_ == Switch::Middle && sw == Switch::Down) {
                 if (readout_) readout_ = false;
-                else {
-                    // First DOWN click in a mode runs it; the next advances. That way a test
-                    // is never restarted by accident while its result is being read.
-                    if (gB.done || gB.mode == 3) { gB.mode = (uint8_t)((gB.mode + 1) & 3); gB.done = false; }
-                    else gB.runReq = (uint8_t)(gB.runReq + 1);
-                }
+                else { gB.mode = (uint8_t)((gB.mode + 1) & 3); gB.done = false; }
             }
             // UP DELIBERATELY DOES NOT CHANGE MODE. It used to cycle backwards, which fired
             // the instant the switch moved — so reaching for the readout silently jumped the
