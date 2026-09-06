@@ -4,30 +4,50 @@ Turns the Music Thing Workshop Computer into a **Game Boy Advance link-cable mas
 it boots a cartridge-less GBA over the pulse jacks using BIOS **Multiboot**, then keeps a
 live SPI connection so the GBA can act as a controller + screen for the module.
 
-> **Status: early / experimental (v0.1.0).** The RP2040 firmware is complete and builds;
-> the GBA payload is a minimal bidirectional smoke test intended to grow into a real UI.
-> See [Current state](#current-state).
+> **Status: WORKING on hardware (2026-09-06).** A cartridge-less GBA boots from the module,
+> runs the uploaded payload, shows *"MTM - Workshop Computer Link"*, and reports its buttons
+> back - A/B/L/R light LEDs 2-5. The payload is still a minimal bidirectional demo intended
+> to grow into a real UI.
+>
+> Bring-up was not straightforward. **Read
+> [`diagnostics/POSTMORTEM.md`](diagnostics/POSTMORTEM.md)** before touching the transport:
+> four stacked faults, several of them in our own diagnostics, and the non-obvious facts that
+> make this work are recorded there.
 
 ## Wiring
 
 Wire a bare GBA link socket to the module's pulse jacks, **common ground**:
 
-| GBA pin | Workshop jack | RP2040 GPIO | Direction |
-|---------|---------------|-------------|-----------|
-| SC (clock) | Pulse Out 1 | GPIO 8 | RP2040 → GBA (master) |
-| SI (MOSI)  | Pulse Out 2 | GPIO 9 | RP2040 → GBA |
-| SO (MISO)  | Pulse In 1  | GPIO 2 | GBA → RP2040 |
-| GND        | ground      | —      | common |
+| GBA pin | Workshop jack | RP2040 GPIO | Direction | Series R |
+|---------|---------------|-------------|-----------|----------|
+| 5 SC (clock) | Pulse Out 1 | GPIO 8 | RP2040 → GBA (master) | **1 kΩ** |
+| 3 SI (MOSI)  | Pulse Out 2 | GPIO 9 | RP2040 → GBA | **1 kΩ** |
+| 2 SO (MISO)  | Pulse In 1  | GPIO 2 | GBA → RP2040 | **none** |
+| 6 GND        | ground      | —      | common | — |
 
-Then power on a GBA with **no cartridge** (it shows the multiboot/"download" screen).
+Pins 1 (VCC - an output the *GBA* sources) and 4 (SD, unused in normal/SIO32) stay
+disconnected. The 1 kΩ resistors go on the two lines **we drive**: the Workshop pulse outputs
+swing ~6 V into 3.3 V inputs. Never put one in series with SO - it fights the pull-up that
+biases the Pulse In 1 transistor stage.
+
+> **Many GBA link cables CROSS SO/SI between their two ends.** If yours does, swap the two
+> data wires at the Workshop end (SC and GND stay put). Do not guess - flash
+> `diagnostics/cablecheck.uf2` and run MODE 0, which listens on Pulse In 1 and Pulse In 2 at
+> once and tells you which wire carries the GBA's SO. See
+> [`diagnostics/CABLES.md`](diagnostics/CABLES.md).
+
+Power the **Computer first, then the GBA** - the console only syncs if the master is already
+clocking when it boots. Power-cycle the *GBA* to retry. Cartridge-less, on the logo screen.
 
 ## How it works
 
 - **Multiboot upload.** The RP2040 runs the documented single-cartridge multiboot
   handshake (sync → header → palette/handshake → encrypted payload → CRC) and streams a
   small program into the GBA's EWRAM, which the BIOS then runs. See `gba_multiboot.cpp`.
-- **Live link.** After boot, the RP2040 polls the GBA ~1 kHz: it sends four parameter
-  bytes and receives the button bitfield. See `gba_link.cpp`.
+- **Live link.** After boot, the RP2040 polls the GBA at ~200 Hz: it sends four parameter
+  bytes and receives the button bitfield, framed with a `0x600D` tag. See `gba_link.cpp`.
+  The rate is deliberately modest - the GBA slave holds only one pending transfer and is
+  briefly deaf while re-arming, so polling faster just manufactures rejected words.
 - **Two cores.** ComputerCard's 48 kHz audio/CV loop runs on **core 0** (`main.cpp
   ProcessSample`). The entire GBA link engine runs on **core 1** and talks to core 0 only
   through the lock-free `GbaShared` struct — the audio path is never blocked. This reuses
@@ -35,8 +55,12 @@ Then power on a GBA with **no cartridge** (it shows the multiboot/"download" scr
 - **PIO SPI with baked-in inversion.** The pulse jacks are hardware-inverted and GPIO
   8/9/2 aren't hardware-SPI pins, so the transfer is a PIO state machine (`gba_spi.pio`,
   mode 3, MSB-first, 32-bit). All Workshop inversion is absorbed by IO-pad overrides, so
-  the wire sees correct SPI polarity. The clock is deliberately slow (100 kHz) to stay
-  within the transistor-conditioned Pulse In 1 input's bandwidth.
+  the wire sees correct SPI polarity. Timing follows GBATEK's *SIO Normal Mode*: SC idles
+  HIGH, both ends drive on the falling edge and sample on the rising edge (SPI mode 3).
+  **Pulse In 1 inverts** - established by the GBA's own reply, not by inference; see the
+  post-mortem. The multiboot clock is chosen at runtime from a ladder (100k, 50k, 16k, 5k,
+  1k), trying each until the upload succeeds, since the working rate is a property of the
+  cable and console rather than a constant.
 
 ## v0 behaviour
 

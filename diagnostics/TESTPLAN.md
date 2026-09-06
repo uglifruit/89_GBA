@@ -1,5 +1,12 @@
 # Bench test plan — 2026-09-04
 
+> # RESOLVED — THE LINK WORKS (2026-09-06)
+> The GBA boots, runs the payload, shows *"MTM - Workshop Computer Link"*, and reports its
+> buttons back. **For what actually went wrong and why, read
+> [`POSTMORTEM.md`](POSTMORTEM.md).** This plan is kept as the re-test procedure for a rewire,
+> a different cable, or a different console — work it top to bottom and it re-derives the
+> whole configuration from scratch.
+
 Written after a full audit against [GBATEK](https://problemkaputt.de/gbatek.htm). Two new
 things came out of it: **a firmware timing bug** (we have probably been sampling on the wrong
 clock phase all along) and **a cable ambiguity that firmware cannot fix but can now identify**.

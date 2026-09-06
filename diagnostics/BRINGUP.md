@@ -1,5 +1,11 @@
 # Hardware bring-up notes (89_GBA)
 
+> # WORKING (2026-09-06) — see [`POSTMORTEM.md`](POSTMORTEM.md)
+> Kept as the accumulated background. Note that several conclusions recorded below as
+> "measured" were later **disproved** — most importantly the MISO polarity, whose scope
+> "measurement" had both probes on the same net. Treat this file as a history rather than
+> a reference.
+
 > **Start at `TESTPLAN.md`** — it is the current step-by-step bench procedure, with a
 > decision tree for each outcome. This file is the accumulated background behind it.
 
