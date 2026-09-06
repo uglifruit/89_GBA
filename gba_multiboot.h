@@ -29,3 +29,18 @@ enum class MultibootResult : uint8_t {
 // This does NOT init the SPI transport — call gba_spi_init() first. On NoGBA it is safe
 // to simply retry (that's the normal "waiting for the GBA to be ready" state).
 MultibootResult gba_multiboot_send(const uint8_t *rom, size_t rom_size);
+
+// Wait until the GBA signals it is ready to receive a multiboot image, or `timeoutMs`
+// elapses. Returns true if the slave-ready signal was seen.
+//
+// WHY THIS MATTERS. A multiboot attempt only succeeds if the console is ALREADY sitting in
+// its BIOS wait state; while it is still showing the logo, every attempt fails no matter what
+// clock rate is used. So a "try each rate, fastest first, keep the first that works" ladder
+// does not find the fastest workable rate at all — it finds whichever rung it happened to be
+// on at the moment the GBA became ready. That makes the winning rate vary run to run
+// depending on when the console was switched on, which is exactly what shows up on the bench.
+//
+// GBATEK, master init: "Wait for SI to become LOW (slave ready). (Check timeout here!)" The
+// GBA pulls its SO low when ready, and that arrives on our MISO pin — so this is checkable
+// before committing to any rate, with no protocol state consumed.
+bool gba_wait_slave_ready(uint32_t timeoutMs);

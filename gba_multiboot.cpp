@@ -103,6 +103,19 @@ static inline uint32_t xfer(uint32_t w)
     return r;
 }
 
+bool gba_wait_slave_ready(uint32_t timeoutMs)
+{
+    // The pad reads the GBA's SO line directly (GBA_MISO_INOVER already corrects for the
+    // Workshop's inverting input stage), so this needs no transfers and consumes no protocol
+    // state — it is purely an observation.
+    absolute_time_t deadline = make_timeout_time_ms(timeoutMs);
+    while (!time_reached(deadline)) {
+        if (!gpio_get(GBA_MISO_PIN)) return true;    // SO low = slave ready
+        sleep_us(200);
+    }
+    return false;
+}
+
 MultibootResult gba_multiboot_send(const uint8_t *rom, size_t rom_size)
 {
     if (!rom || rom_size < 0xC0) return MultibootResult::BadPayload;

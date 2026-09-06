@@ -222,6 +222,12 @@ static void core1_entry()
     // completes — and record which rung won. That number IS result #4.
     for (;;) {
         gB.linkUp = false;
+
+        // Wait for the console to actually BE ready before starting the ladder. Without this
+        // the winning rung is decided by when the GBA finished booting rather than by what the
+        // link can sustain, and it changes run to run.
+        gba_wait_slave_ready(10'000);
+
         MultibootResult r = MultibootResult::NoGBA;
         for (int i = kNumRates - 1; i >= 0; i--) {          // fastest first
             gB.curHz = kRates[i];
