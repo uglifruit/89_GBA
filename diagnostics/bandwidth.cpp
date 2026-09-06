@@ -253,6 +253,18 @@ static void core1_entry()
                 // is what starts the work.
                 if (m < 3) {
                     gB.busy = true; gB.done = false;
+
+                    // WAIT for bench mode to be confirmed before measuring. Mode 0 runs the
+                    // instant the link comes up, which is a race against the payload actually
+                    // entering bench: if it loses, every rate scores as failed and the result
+                    // reads zero for a reason that has nothing to do with the rates. Assert
+                    // the enter word until the echo comes back, then measure.
+                    for (int w = 0; w < 500 && !gB.benchOk; w++) {
+                        uint32_t k = gba_spi_xfer32(kBenchEnter);
+                        if ((k >> 16) == kTag)
+                            gB.benchOk = ((uint16_t)(k & 0xFFFF) == (uint16_t)(kBenchEnter & 0xFFFF));
+                        sleep_ms(2);
+                    }
                     switch (m) {
                         case 0: modeSck();  break;
                         case 1: modePoll(); break;
