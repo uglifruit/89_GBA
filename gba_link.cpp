@@ -33,32 +33,55 @@ static inline uint32_t pack_params()
 
 // SPI clock rates. Multiboot is deliberately slow to stay well within the Pulse In 1
 // transistor input's bandwidth; the polling loop can try a little faster but stays modest.
-static constexpr uint32_t kMultibootHz = 100'000;   // 100 kHz — matches slow reference uploaders
-static constexpr uint32_t kPollHz      = 100'000;   // keep equal for v0; raise once proven
+// Multiboot rate LADDER, fastest first. The link was first proven on hardware at ~1 kHz
+// (2026-09-06), and 100 kHz has never been shown to work through the slow Pulse In 1
+// transistor stage — so do not hardcode a rate and hope. Each entry is tried in turn until
+// multiboot succeeds; the winning rate is then reused first next time, so a reconnect is
+// quick once the working speed is known.
+static constexpr uint32_t kMultibootLadder[] = { 100'000, 50'000, 16'000, 5'000, 1'000 };
+static constexpr int kLadderLen = (int)(sizeof(kMultibootLadder) / sizeof(kMultibootLadder[0]));
+
+// The post-boot poll runs at the rate that actually worked for multiboot, never faster: the
+// payload's serial slave is on the same wire with the same bandwidth limit.
 
 void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
 {
-    gba_spi_init(kMultibootHz);
+    gba_spi_init(kMultibootLadder[0]);
+
+    int ladderIx = 0;          // index of the rate to try first; sticks once one works
 
     for (;;) {
-        // ---- (re)connect: run multiboot until it succeeds ----
+        // ---- (re)connect: walk the rate ladder until multiboot succeeds ----
         gGba.state = LinkState::Connecting;
-        gba_spi_set_clock(kMultibootHz);
 
-        MultibootResult r = gba_multiboot_send(payload, payload_size);
-        if (r != MultibootResult::Ok) {
+        MultibootResult r = MultibootResult::NoGBA;
+        int tried = 0;
+        for (; tried < kLadderLen; tried++) {
+            int ix = (ladderIx + tried) % kLadderLen;
+            uint32_t hz = kMultibootLadder[ix];
+            gGba.linkHz = hz;                      // published so the UI can show the rate
+            gba_spi_set_clock(hz);
+
+            r = gba_multiboot_send(payload, payload_size);
+            if (r == MultibootResult::Ok) { ladderIx = ix; break; }
+
             gGba.lastError = (uint8_t)r;
-            // NoGBA is the normal "not plugged in / not ready yet" case: just retry.
-            // Other errors also retry, but flag Error briefly so the UI can show it.
-            gGba.state = (r == MultibootResult::NoGBA) ? LinkState::Connecting
-                                                       : LinkState::Error;
+            // NoGBA just means nothing answered at this rate — drop to the next one. Any
+            // other error means we DID get a conversation and it broke partway, which is
+            // much more interesting, so surface it.
+            if (r != MultibootResult::NoGBA) gGba.state = LinkState::Error;
+        }
+
+        if (r != MultibootResult::Ok) {
+            gGba.state = (gGba.lastError == (uint8_t)MultibootResult::NoGBA)
+                       ? LinkState::Connecting : LinkState::Error;
             sleep_ms(250);
             continue;
         }
 
         // ---- booted: give the payload a moment to start its serial slave ----
         gGba.state = LinkState::Booted;
-        gba_spi_set_clock(kPollHz);
+        gba_spi_set_clock(kMultibootLadder[ladderIx]);   // poll at the proven rate, not faster
         sleep_ms(50);
 
         // ---- polling loop ----

@@ -90,7 +90,58 @@ ever latching in `linkcheck` tests 2 and 3. We were listening on the GBA's input
 
 ---
 
-## 🎉 BREAKTHROUGH (2026-09-06, night): THE LINK WORKS — the data was inverted
+## ✅ HANDSHAKE CONFIRMED — next step is the real multiboot upload
+
+`linkcheck` TEST 2 with the corrected polarity: **LED0 (ECHO), LED1 (SYNC) and LED2 all
+latch.** Echo means the low-16 came back `0x6202`; sync means the high-16 came back `0x7202`.
+That is the full multiboot recognition handshake, on real hardware. The transport works.
+
+### Now run the real thing
+
+Flash **`build/gba_link.uf2`** (the applet, not a diagnostic). It runs multiboot on core 1
+automatically and retries forever, so just power-cycle the GBA with the Computer running.
+
+Applet LED meanings (`main.cpp`) — note these are NOT the diagnostic conventions:
+
+| LED | Meaning |
+|---|---|
+| **LED0** | **BOOTED** — multiboot completed, the payload is running on the GBA |
+| **LED1** | connecting, or an error occurred |
+| LED2–LED5 | GBA buttons **A, B, L, R** — press them on the console |
+
+**The payoff:** once LED0 is lit, pressing A/B/L/R on the GBA lights LEDs 2–5. That is the
+full round trip — code uploaded to the console, and the console reporting back.
+
+The payload is only **624 bytes**, so the whole upload takes about **5 s even at 1 kHz**.
+
+### Rate ladder (added 2026-09-06)
+
+The applet used to hardcode 100 kHz for multiboot, which **has never been shown to work** —
+the handshake was proven at ~1 kHz, with the Main knob fully CCW. It now walks a ladder,
+fastest first: **100k → 50k → 16k → 5k → 1k**, trying multiboot at each until one succeeds,
+then sticking with the winner (`gGba.linkHz` publishes it). Expect the first connection to
+take a few seconds while it steps down.
+
+### What can still go wrong, and what it means
+
+The handshake is only the first of six stages. These have **never run on hardware**:
+header transfer (0xC0 bytes), palette/handshake, length/seed, the encrypted main transfer
+with its per-word offset check, and the final CRC exchange.
+
+| Symptom | Likely stage | Meaning |
+|---|---|---|
+| LED0 never lights, LED1 steady | sync | never got `0x7202` — recheck wiring/polarity |
+| LED1 flickers, cycles, retries | later stages | a stage broke partway; `gGba.lastError` holds the `MultibootResult` |
+| LED0 lights, then drops back | post-boot poll | multiboot succeeded but the payload's serial slave is not answering with the `0x600D` tag |
+| LED0 solid, buttons work | — | **done** |
+
+If it cycles, the most informative thing is *which* rate it settles on and how far it gets —
+`MultibootResult` distinguishes `BadHandshake`, `TransferError` and `CrcMismatch`, and those
+point at very different causes.
+
+---
+
+## The breakthrough that got us here (2026-09-06, night): the data was inverted
 
 `linkcheck` TEST 3 with the corrected wiring, word readout:
 

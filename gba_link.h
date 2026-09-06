@@ -40,6 +40,11 @@ struct GbaShared {
     volatile uint32_t  rxSeq     = 0;   // increments each successful poll (liveness)
     volatile LinkState state     = LinkState::Idle;
     volatile uint8_t   lastError = 0;   // MultibootResult of the last failed attempt
+    // SCK rate (Hz) currently being used. Core 1 walks a ladder of rates until multiboot
+    // succeeds — the link was first proven at ~1 kHz and 100 kHz has never been shown to
+    // work through the slow Pulse In 1 transistor stage — so the working rate is a runtime
+    // fact, not a constant, and worth surfacing.
+    volatile uint32_t  linkHz    = 0;
 
     // ---- core 0 -> core 1 ----
     // Up to 4 modular parameters streamed to the GBA (e.g. knob/CV values, 0..255).
