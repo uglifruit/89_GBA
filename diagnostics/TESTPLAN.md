@@ -90,58 +90,74 @@ ever latching in `linkcheck` tests 2 and 3. We were listening on the GBA's input
 
 ---
 
-## ⇢ CURRENT FRONT LINE (2026-09-06, later): run `handshake.uf2` MODE 0
+## ⇢ CURRENT FRONT LINE (2026-09-06, evening)
 
-The swap worked and the console is provably alive:
+### What is now PROVEN
 
-* `cablecheck` MODE 0 now shows the bursty activity on **LED0 (Pulse In 1)** — the same
-  pattern that was on LED1 before the swap. The GBA's SO arrives where we listen. ✅
-* `cablecheck` MODE 2, with **no clocking at all**, shows **Pulse In 1 sitting LOW**. That is
-  GBATEK's master-init condition, *"Wait for SI to become LOW (slave ready)"* — **the console
-  is signalling that it is ready.** ✅
-* `cablecheck` MODE 3 confirms SC toggling and reaching the line. ✅
+* **The swap was right.** `cablecheck` MODE 0 shows the bursty activity on **LED0 (Pulse In
+  1)** — the pattern that was on LED1 before the swap. The GBA's SO arrives where we listen.
+* **The console is alive and signalling ready.** `cablecheck` MODE 2, with no clocking at
+  all, shows Pulse In 1 **LOW** — GBATEK's *"Wait for SI to become LOW (slave ready)"*.
+* **SC toggles** at the Workshop end (MODE 3).
 
-But `linkcheck` kept returning `0x00000000`, which we had been reading as "dead line".
+### CORRECTION: the `0x0000` theory was wrong
 
-**It may not be dead.** GBATEK's multiboot table:
+An earlier version of this section argued that `0x0000` was GBATEK's documented
+*"slave entered correct mode"* reply and that our sync loop was discarding a good answer.
+**That was a misreading.** GBATEK's `6200`/`0000`/`610y`/`720x` table lists **16-bit** words —
+and SIO *normal* mode only has 8-bit and 32-bit (SIOCNT bit 12). That table describes the
+**multi-play** multiboot variant, which is a different protocol on a different electrical
+topology.
 
-```
-15x   6200   FFFF     Slave not in multiplay/normal mode yet
-1     6200   0000     Slave entered correct mode now
-1     610y   720x     Recognition okay, exchange master/slave info
-```
+Our applet uses **normal 32-bit** mode with `0x6202` → `0x7202`, which is what the
+microcontroller/PC reference uploaders use, and that remains correct.
 
-**`0x0000` is a documented, correct reply** — "slave entered correct mode" — and it comes in
-response to **`0x6200`**. Our applet and every diagnostic so far send **`0x6202`** and spin
-waiting for `0x7202`, never sending `0x6200` and never treating `0x0000` as progress. If the
-console has been answering correctly, we have been discarding the answer.
+`handshake.uf2` MODE 0 confirmed the correction empirically: it reached "saw `0x0000`" and
+"saw `0xFFFF`" but **never `0x72xx`**, in either the GBATEK or the reference sequence. The
+mixture of `0x0000`, occasional non-zero and occasional `0xFFFF` halves is a line drifting
+between states — the console's own asynchronous polling leaking into our sample windows —
+not a slave shifting data in step with our clock.
 
-`handshake.uf2` tests exactly that: it walks the GBATEK sequence as a state machine and
-latches an LED per stage reached, so you can see where it stalls.
+### THE THING THAT HAS NEVER ACTUALLY BEEN TESTED
 
-| LED | Stage reached (all latch; solid = now, pulsing = earlier) |
-|---|---|
-| **LED0** | any non-zero, non-`0xFFFFFFFF` reply — the link carries something |
-| **LED1** | saw `0xFFFF` — slave present, not yet in the right mode |
-| **LED2** | saw `0x0000` to `0x6200` — **slave entered correct mode** |
-| **LED3** | saw `0x72xx` — **RECOGNITION. The one that matters.** |
+**Every variant sweep so far ran with the wrong wiring.** TEST 3 was run before the swap, when
+Pulse In 1 was connected to the GBA's *input* pin. Those sweeps could not have succeeded
+regardless of timing, so they proved nothing about the sample point.
 
-Modes: **0 = GBATEK sequence (start here)**, 1 = the current reference sequence for
-comparison, 2 = GBATEK at ~1 kHz, 3 = alternates between the two every ~4 s.
+**Run `linkcheck.uf2` TEST 3 now, with the corrected wiring.** It is the first meaningful
+sweep of the project.
 
-Hold UP ~1 s for the word readout of the most informative word seen.
+1. Flash `linkcheck.uf2`, click to **TEST 3** (LED4 on, LED5 on).
+2. Power-cycle the **GBA** with the Computer already running, and let it settle on the logo.
+3. **Leave it for a full 60 seconds** — one pass over all 50 slots is ~35 s.
+4. Watch LED0 (echo) and LED1 (sync) the whole time; both latch and pulse, so anything that
+   ever worked stays visible.
+5. Then hold UP ~1 s and read the word out. It now shows the **richest** word seen, not the
+   last one.
 
-**What each outcome means:**
+### If the sweep still finds nothing: verify SC actually ARRIVES
 
-* **LED3 lights** — recognition. The handshake works and the applet's sync loop needs
-  rewriting to GBATEK's sequence.
-* **LED2 but never LED3** — the console reaches "correct mode" but never recognises us.
-  Suspect our SI (transmit) data not arriving: meter Pulse Out 2's wire in `cablecheck`
-  MODE 1, which drives it with a slow pattern.
-* **LED1 only** — slave present but never enters the right mode. Power-cycle the GBA with
-  the Computer already clocking.
-* **LED0 only, or nothing** — back to the transport: try MODE 2 (slow), then `linkcheck`
-  TEST 3's variant sweep.
+This is the last unverified link in the chain. We have confirmed SC toggles at the *Workshop*
+jack; we have never confirmed it arrives *at the console*. A GBA that is ready but never
+clocked behaves exactly as observed: SO parked at its inactive level, with its own periodic
+polling as the only activity.
+
+Symptom that supports this: `cablecheck` MODE 0 clocks **continuously**, yet the activity on
+Pulse In 1 arrives in **bursts with quiet gaps**. A slave shifting in response to our clock
+would produce continuous activity. Bursts on the console's own schedule suggest it is not
+seeing our clock at all.
+
+With the scope, on the GBA side of the 1 kΩ:
+
+* `cablecheck` MODE 3 gives a slow ~2 Hz square — easy to catch.
+* Check it **reaches a valid logic high** at the console end. The 1 kΩ into the GBA's clamp
+  diode should leave ~3.9 V; if it is sagging toward 1–2 V, the resistor is too large for
+  what the input is doing. **Try 470 Ω, or a direct link**: GBATEK's own Xboo PC→GBA multiboot
+  cable drives the GBA's inputs from a 5 V parallel port with **no series resistor at all**
+  ("the general connection is very simple, only needs four wires"), so a direct connection is
+  what the reference design actually does.
+* Also check SI (Pulse Out 2's wire) the same way, in `cablecheck` MODE 1, which drives it
+  with a slow pattern.
 
 ---
 
