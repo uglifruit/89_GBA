@@ -103,9 +103,8 @@ Power the Computer first, then the GBA. Cartridge-less, on the Nintendo logo scr
 
 ### Read the result
 
-LED0 = Pulse In 1 has shown activity. LED1 = Pulse In 2 has shown activity.
-
-LED0 = Pulse In 1 (your **SO** wire). LED1 = Pulse In 2 (your **SI** wire).
+LED0 = Pulse In 1 (your **SO** wire) has shown activity.
+LED1 = Pulse In 2 (your **SI** wire) has shown activity.
 
 | What you see | Meaning | Go to |
 |---|---|---|
