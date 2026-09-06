@@ -30,20 +30,37 @@
 // LED4 + LED5 = MODE NUMBER IN BINARY (LED4 = bit1, LED5 = bit0). Same convention as
 // linkcheck. Click DOWN for next mode, UP for previous. Nothing needs holding.
 //
+// *** WHEN TO TAKE THE READING ***
+//   The activity LEDs describe a ROLLING 2-SECOND WINDOW, not all of history. (The first
+//   version latched forever, so plugging and power-on transients stayed on the display and
+//   with the GBA switched OFF it still showed activity on both inputs. Fixed.)
+//   Because of that you no longer have to be careful about ordering — but the cleanest read
+//   is still:
+//     1. Computer on, cablecheck already running in MODE 0 (SC must already be clocking when
+//        the console boots — that is the documented multiboot requirement).
+//     2. Turn the GBA on, cartridge-less, and let it settle on the Nintendo logo.
+//     3. WAIT ~5 SECONDS for the boot transients to age out of the window.
+//     4. Now read LED0/LED1. They reflect only the last two seconds.
+//   The GBA's line does things during boot BEFORE it reaches the multiboot wait state, so a
+//   reading taken while the logo is still animating is not trustworthy. Let it settle.
+//
 // MODE 0 — LISTEN  (LED4 off, LED5 off)   ** THE ONE THAT ANSWERS THE QUESTION **
 //   Clocks SC continuously but drives NO data. Watches both inputs.
-//   LED0 = Pulse In 1 has shown activity (seen both high and low)
-//   LED1 = Pulse In 2 has shown activity
+//   LED0 = Pulse In 1 saw >=8 transitions in the last 2 s window
+//   LED1 = Pulse In 2 saw >=8 transitions in the last 2 s window
 //   LED2 = Pulse In 1 level right now
 //   LED3 = Pulse In 2 level right now
-//   VERDICT: with the GBA powered on and on the logo screen, the input that shows ACTIVITY
-//   is carrying the GBA's SO.
+//   A driven data line shows thousands of transitions in 2 s; a single power-on glitch shows
+//   one or two, which is why the threshold exists.
+//   VERDICT: with the GBA powered on and settled on the logo screen, the input that shows
+//   ACTIVITY is carrying the GBA's SO.
 //       LED0 on, LED1 off -> socket pin 2 carries SO. Cable is STRAIGHT. Wire as documented.
 //       LED1 on, LED0 off -> socket pin 3 carries SO. Cable is CROSSED. SWAP the two data
 //                            wires at the Workshop end (see SWAP FIX below).
 //       both off          -> the GBA is not driving at all: check power-on order, that it is
 //                            cartridge-less on the logo, and GND continuity.
-//       both on           -> suspect a short between the two data lines; run MODE 1.
+//       both on           -> suspect a short between the two data lines; run MODE 1 with the
+//                            GBA DISCONNECTED (all four LEDs should then be off).
 //
 // MODE 1 — SHORT / CROSSTALK  (LED4 off, LED5 ON)   GBA DISCONNECTED
 //   Drives Pulse Out 1 and Pulse Out 2 with two different slow patterns and checks whether
@@ -58,8 +75,8 @@
 //   No clocking at all; SC parked in its idle state (HIGH at the jack, per GBATEK: "during
 //   inactive transfer, the shift clock (SC) is high"). GBATEK's master init says: "Wait for
 //   SI to become LOW (slave ready)". Our SI is whichever input carries the GBA's SO.
-//   LED0 = Pulse In 1 has been seen LOW  (a ready signal arrived on pin 2)
-//   LED1 = Pulse In 2 has been seen LOW  (a ready signal arrived on pin 3)
+//   LED0 = Pulse In 1 went LOW during the last 2 s window (ready signal on pin 2)
+//   LED1 = Pulse In 2 went LOW during the last 2 s window (ready signal on pin 3)
 //   LED2 = Pulse In 1 low right now
 //   LED3 = Pulse In 2 low right now
 //   A GBA waiting for multiboot pulls its SO low. This finds it without any transfer at all,
@@ -142,7 +159,9 @@ private:
 
         driveSc(true);      // GBATEK: SC idles HIGH
         driveSi(true);
-        in1Hi_ = in1Lo_ = in2Hi_ = in2Lo_ = false;
+        edges1_ = edges2_ = 0; low1_ = low2_ = false;
+        shownEdges1_ = shownEdges2_ = 0; shownLow1_ = shownLow2_ = false;
+        winTick_ = 0;
         for (int i = 0; i < 4; i++) { agree_[i] = 0; total_[i] = 0; }
         cnt_ = 0;
     }
@@ -152,13 +171,35 @@ private:
     void driveSc(bool jackHigh) { gpio_put(SC_PIN, !jackHigh); scLevel_ = jackHigh; }
     void driveSi(bool jackHigh) { gpio_put(SI_PIN, !jackHigh); siLevel_ = jackHigh; }
 
+    // ROLLING WINDOW, not a latch. The first version of this used sticky "seen high AND seen
+    // low" flags that only cleared on mode entry, so every plug/unplug and power-on transient
+    // stayed on the display forever — with the GBA switched OFF it still showed activity on
+    // both inputs. Now each input's 0<->1 transitions are counted over a ~2 s window; at the
+    // end of each window the count becomes the displayed result and the counter restarts.
+    // The display therefore always describes the LAST TWO SECONDS and nothing older, so it
+    // no longer matters what happened while you were wiring or powering things up.
     void sampleInputs()
     {
-        in1_ = gpio_get(IN1_PIN);
-        in2_ = gpio_get(IN2_PIN);
-        if (in1_) in1Hi_ = true; else in1Lo_ = true;
-        if (in2_) in2Hi_ = true; else in2Lo_ = true;
+        bool a = gpio_get(IN1_PIN);
+        bool b = gpio_get(IN2_PIN);
+        if (a != in1_) edges1_++;
+        if (b != in2_) edges2_++;
+        in1_ = a; in2_ = b;
+        if (!a) low1_ = true;            // "went low at some point this window" (slave-ready)
+        if (!b) low2_ = true;
+
+        if (++winTick_ >= 96000) {       // 2 s at 48 kHz
+            winTick_ = 0;
+            shownEdges1_ = edges1_; shownEdges2_ = edges2_;
+            shownLow1_ = low1_;     shownLow2_ = low2_;
+            edges1_ = edges2_ = 0;  low1_ = low2_ = false;
+        }
     }
+
+    // A driven data line shows thousands of transitions in 2 s. A single power-on glitch
+    // shows one or two. Require a real burst so transients cannot read as "activity".
+    bool active1() const { return shownEdges1_ >= 8; }
+    bool active2() const { return shownEdges2_ >= 8; }
 
     // ── MODE 0: listen on both inputs while clocking SC ──────────────────────────────────
     void modeListen()
@@ -168,9 +209,9 @@ private:
         if ((tick_ & 1) == 0) driveSc(!scLevel_);
         driveSi(true);                       // parked high; we drive no data in this mode
         sampleInputs();
-        LedOn(0, in1Hi_ && in1Lo_);          // activity latches — a brief reply is not missed
-        LedOn(1, in2Hi_ && in2Lo_);
-        LedOn(2, in1_);
+        LedOn(0, active1());       // activity in the last completed 2 s window
+        LedOn(1, active2());
+        LedOn(2, in1_);            // live level
         LedOn(3, in2_);
     }
 
@@ -209,9 +250,9 @@ private:
         driveSc(true);       // idle HIGH, per GBATEK
         driveSi(true);
         sampleInputs();
-        LedOn(0, in1Lo_);    // latched: "this line has gone low at some point"
-        LedOn(1, in2Lo_);
-        LedOn(2, !in1_);     // live: "this line is low right now"
+        LedOn(0, shownLow1_);   // went low during the last window
+        LedOn(1, shownLow2_);
+        LedOn(2, !in1_);        // low right now
         LedOn(3, !in2_);
     }
 
@@ -233,7 +274,8 @@ private:
     int  mode_ = 0;
     bool scLevel_ = true, siLevel_ = true;
     bool in1_ = false, in2_ = false;
-    bool in1Hi_ = false, in1Lo_ = false, in2Hi_ = false, in2Lo_ = false;
+    uint32_t edges1_ = 0, edges2_ = 0, shownEdges1_ = 0, shownEdges2_ = 0, winTick_ = 0;
+    bool low1_ = false, low2_ = false, shownLow1_ = false, shownLow2_ = false;
     Switch lastSw_ = Switch::Middle;
 };
 

@@ -99,7 +99,25 @@ The same thing by socket pin number, if you ever need to re-derive it: pin 5 = S
 GND, pin 2 = SO, pin 3 = SI, pin 4 = SD, pin 1 = VCC.
 
 Flash `cablecheck.uf2`. **LED4 + LED5 always show the mode in binary** — MODE 0 is both off.
-Power the Computer first, then the GBA. Cartridge-less, on the Nintendo logo screen.
+
+### WHEN to take the reading
+
+This matters, and an earlier build got it wrong. The activity LEDs now describe a **rolling
+2-second window**, not all of history — the first version latched forever, so plugging and
+power-on transients stayed on screen and the display showed activity on both inputs even with
+the GBA switched **off**.
+
+The clean sequence:
+
+1. Computer on, `cablecheck` **already running in MODE 0** — SC must already be clocking when
+   the console boots. That is the documented multiboot requirement, not a nicety.
+2. Turn the **GBA** on, cartridge-less. Let it settle on the Nintendo logo.
+3. **Wait ~5 seconds** so the boot transients age out of the window.
+4. Now read LED0/LED1.
+
+The GBA drives its line during boot **before** it reaches the multiboot wait state, so a
+reading taken while the logo is still animating is not trustworthy. Let it settle. To retry,
+power-cycle the **GBA** only and wait again.
 
 ### Read the result
 
