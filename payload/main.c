@@ -112,6 +112,7 @@ static uint16_t read_buttons(void)
 #define COL_OK     rgb15( 6, 31, 10)
 #define COL_WAIT   rgb15(31, 14,  4)
 #define COL_BAR    rgb15(10, 22, 31)
+#define COL_HEX    rgb15(31, 31, 31)   // white: the diagnostic line must be easy to read
 
 #define DYN_Y      52    // dynamic widgets live below this
 
@@ -140,27 +141,29 @@ static uint16_t g_buttons = 0;
 #define BENCH_ENTER 0xBE7CBE7Cu
 #define BENCH_LEAVE 0xBE7C0000u
 
-static int g_bench = 0;
-static int g_benchDirty = 1;      // screen needs repainting for the current mode
+// VOLATILE deliberately. These are written inside service(), which is called from many
+// places including tight loops, and read by the main loop. Without volatile the compiler is
+// entitled to cache them in a register at -O2 and never observe the change — which is
+// indistinguishable from "the magic word was never recognised".
+static volatile int g_bench = 0;
+static volatile int g_benchDirty = 1;   // screen needs repainting for the current mode
+static volatile int g_enterHits = 0;    // shown on screen: proof the compare actually fires
 
 static void service(void)
 {
     if (!(REG_SIOCNT & SIO_START)) {          // a word completed (or we have never armed)
         uint32_t got = REG_SIODATA32;
-        static int enterHits = 0, leaveHits = 0;
         g_params = got;
         g_rx++;
 
-        // COUNT the magic words rather than demanding they be strictly consecutive. The host
-        // sends a burst, but this slave is deaf while it redraws and can miss any individual
-        // word — so "two in a row" was unreliable in exactly the situation it had to work in.
-        // Three hits is still far beyond anything the normal applet could produce by accident:
-        // it would need all four knob/CV bytes to land on 0xBE7CBE7C three separate times.
-        if (got == BENCH_ENTER) { if (++enterHits >= 3 && !g_bench) { g_bench = 1; g_benchDirty = 1; } }
-        else if (got != BENCH_LEAVE) enterHits = 0;
-
-        if (got == BENCH_LEAVE) { if (++leaveHits >= 3 && g_bench) { g_bench = 0; g_benchDirty = 1; } }
-        else if (got != BENCH_ENTER) leaveHits = 0;
+        // ONE word is enough, in each direction. Requiring several (consecutive, then merely
+        // counted) has failed twice on hardware while the host's word was demonstrably
+        // arriving intact — visible as BE7CBE7C on screen. The extra conditions were only
+        // ever guarding against accidental entry, and a full 32-bit exact match is already
+        // vanishingly unlikely: the applet would need all four knob/CV bytes to land on
+        // 0xBE7CBE7C simultaneously. Trade that theoretical safety for something that works.
+        if (got == BENCH_ENTER) { g_enterHits++; if (!g_bench) { g_bench = 1; g_benchDirty = 1; } }
+        if (got == BENCH_LEAVE) { if (g_bench) { g_bench = 0; g_benchDirty = 1; } }
 
         REG_SIODATA32 = g_bench ? ((0x600Du << 16) | (got & 0xFFFFu))   // echo
                                 : ((0x600Du << 16) | g_buttons);        // normal reply
@@ -232,10 +235,21 @@ int main(void)
         // GBA is not receiving anything" look identical from the bench. With it you can read
         // straight off the screen whether BE7CBE7C is arriving intact.
         {
+            // HOLD the value for ~0.5 s. Updating every frame made it change far too fast to
+            // read, so what it showed could only be guessed at — and a guess is exactly what
+            // must not be fed back into a diagnosis.
+            static uint32_t held = 0; static int holdN = 0;
+            if (++holdN >= 30) { holdN = 0; held = params; }
             char buf[9];
-            hex32(buf, params);
+            hex32(buf, held);
             srect(0, 36, SCREEN_W, 9, COL_BG);
-            text_centre(36, buf, COL_DIM, 1);
+            text(60, 36, buf, COL_HEX, 1);
+            // How many times the BENCH_ENTER compare has actually matched. If the hex line
+            // reads BE7CBE7C and this stays 00, the comparison itself is not firing and the
+            // fault is nowhere near the link.
+            char hits[9];
+            hex32(hits, (uint32_t)g_enterHits);
+            text(150, 36, hits + 6, COL_HEX, 1);
         }
 
         // Activity pip: steps across on every received word, so liveness is visible even if
