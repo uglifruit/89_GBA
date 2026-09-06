@@ -119,12 +119,35 @@ static volatile uint32_t g_params = 0;
 static volatile uint32_t g_rx     = 0;
 static uint16_t g_buttons = 0;
 
+// ── Bench mode (for diagnostics/bandwidth.uf2) ───────────────────────────────────────────
+// Normally we reply with the button state. In BENCH mode we instead ECHO the low 16 bits of
+// the word just received. That is what lets the host measure the DOWNSTREAM direction: a tag
+// check alone only proves the GBA->host path, and the two directions can have different
+// ceilings. The echo necessarily lags by one transfer, because the reply for transfer N+1 is
+// preloaded while transfer N is being harvested.
+//
+// Entered on two CONSECUTIVE 0xBE7CBE7C words and left on two consecutive 0xBE7C0000, so the
+// normal applet cannot fall into it by accident: it would need all four knob/CV bytes to hit
+// exact values twice in a row.
+#define BENCH_ENTER 0xBE7CBE7Cu
+#define BENCH_LEAVE 0xBE7C0000u
+
+static int g_bench = 0;
+
 static void service(void)
 {
     if (!(REG_SIOCNT & SIO_START)) {          // a word completed (or we have never armed)
-        g_params = REG_SIODATA32;
+        uint32_t got = REG_SIODATA32;
+        static uint32_t prev = 0;
+        g_params = got;
         g_rx++;
-        REG_SIODATA32 = (0x600Du << 16) | g_buttons;   // preload our reply
+
+        if (got == BENCH_ENTER && prev == BENCH_ENTER) g_bench = 1;
+        if (got == BENCH_LEAVE && prev == BENCH_LEAVE) g_bench = 0;
+        prev = got;
+
+        REG_SIODATA32 = g_bench ? ((0x600Du << 16) | (got & 0xFFFFu))   // echo
+                                : ((0x600Du << 16) | g_buttons);        // normal reply
         REG_SIOCNT |= SIO_START;                       // re-arm; also pulls SO low = ready
     }
 }
@@ -152,6 +175,13 @@ int main(void)
     for (;;) {
         g_buttons = read_buttons();
         service();
+
+        // BENCH: service as tightly as possible and draw nothing. This measures the transport
+        // ceiling itself; comparing it against the normal path shows what the UI costs.
+        if (g_bench) {
+            for (int i = 0; i < 2000; i++) service();
+            continue;
+        }
 
         uint32_t rx = g_rx;
         if (rx != lastRx) { lastRx = rx; linkUp = 1; quiet = 0; }

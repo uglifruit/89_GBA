@@ -114,3 +114,17 @@ pico_add_extra_outputs(handshake)
 target_compile_definitions(handshake PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
 pico_enable_stdio_usb(handshake 0)
 target_compile_options(handshake PRIVATE -Wall -Wextra)
+
+# Link bandwidth / latency measurement. Runs the link on core 1 like the applet does.
+add_executable(bandwidth
+    bandwidth.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gba_multiboot.cpp)
+pico_generate_pio_header(bandwidth ${CMAKE_CURRENT_LIST_DIR}/../gba_spi.pio)
+target_include_directories(bandwidth PUBLIC ${CMAKE_CURRENT_LIST_DIR}/..)
+target_link_libraries(bandwidth
+    pico_unique_id pico_stdlib hardware_dma hardware_i2c hardware_pwm
+    hardware_adc hardware_spi hardware_pio pico_multicore)
+pico_add_extra_outputs(bandwidth)
+target_compile_definitions(bandwidth PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
+pico_enable_stdio_usb(bandwidth 0)
+target_compile_options(bandwidth PRIVATE -Wall -Wextra)
