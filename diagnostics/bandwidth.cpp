@@ -27,7 +27,13 @@
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────
 // LED4 + LED5 = MODE in binary (LED4 = bit1, LED5 = bit0), as in every other tool here.
-// Click the switch DOWN for the next mode, UP for the previous. Hold UP ~1 s for the readout.
+//
+// SWITCH: DOWN is the only control that changes anything.
+//   * DOWN click, test not yet run  -> RUN the current mode's test (LED0 pulses while busy)
+//   * DOWN click, test finished     -> advance to the next mode
+//   * UP held ~1 s                  -> toggle the word readout. UP does nothing else: it must
+//                                      not change mode, or reaching for the readout would
+//                                      move you off the result you wanted to read.
 //
 //   MODE 0 — SCK CEILING     (LED4 off, LED5 off)
 //   MODE 1 — POLL CEILING    (LED4 off, LED5 ON )
@@ -271,19 +277,19 @@ private:
         else upHeld_ = 0;
 
         if (sw != lastSw_) {
-            if (lastSw_ == Switch::Middle) {
-                if (sw == Switch::Down) {
-                    if (readout_) readout_ = false;
-                    else {
-                        // First DOWN click in a mode runs it; the next advances. That way a
-                        // test is never started by accident while reading a result.
-                        if (gB.done || gB.mode == 3) { gB.mode = (uint8_t)((gB.mode + 1) & 3); gB.done = false; }
-                        else gB.runReq = (uint8_t)(gB.runReq + 1);
-                    }
-                } else if (sw == Switch::Up && !readout_) {
-                    gB.mode = (uint8_t)((gB.mode + 3) & 3); gB.done = false;
+            if (lastSw_ == Switch::Middle && sw == Switch::Down) {
+                if (readout_) readout_ = false;
+                else {
+                    // First DOWN click in a mode runs it; the next advances. That way a test
+                    // is never restarted by accident while its result is being read.
+                    if (gB.done || gB.mode == 3) { gB.mode = (uint8_t)((gB.mode + 1) & 3); gB.done = false; }
+                    else gB.runReq = (uint8_t)(gB.runReq + 1);
                 }
             }
+            // UP DELIBERATELY DOES NOT CHANGE MODE. It used to cycle backwards, which fired
+            // the instant the switch moved — so reaching for the readout silently jumped the
+            // mode (0 -> 3), dropped the GBA out of bench mode, and then showed mode 3's
+            // number instead of the one you were looking at. UP is now only the readout hold.
             lastSw_ = sw;
         }
     }
