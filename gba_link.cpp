@@ -17,11 +17,20 @@ GbaShared gGba;
 //   GBA   -> RP2040 (MISO word): [31:16]=0x600D framing tag  [15:0]=button bitfield.
 //
 // The framing tag lets the host reject noise / half-synced words from the slow Pulse In 1
-// line and only accept a well-formed reply. If several polls in a row fail the tag check,
-// we assume the link dropped and fall back to re-running multiboot.
+// line and only accept a well-formed reply. If MANY polls in a row fail the tag check, we
+// assume the link dropped and fall back to re-running multiboot.
+//
+// The tolerance has to be generous. The GBA slave can only have one transfer pending at a
+// time, and it is briefly deaf between finishing one word and re-arming for the next — plus
+// whatever time it spends drawing. A short run of tag misses is NORMAL, not a dropped link.
+// The original threshold of 32 at a 1 kHz poll rate meant roughly 32 ms of silence tore the
+// link down and restarted multiboot, which is why it connected and immediately dropped.
 // ---------------------------------------------------------------------------
 
 static constexpr uint16_t kReplyTag = 0x600D;   // "GOOD" — GBA payload stamps this in the high half
+
+// ~5 s of unbroken silence at the 200 Hz poll rate before declaring the link dead.
+static constexpr int kMaxConsecutiveBad = 1000;
 
 static inline uint32_t pack_params()
 {
@@ -93,13 +102,15 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
                 gGba.buttons = (uint16_t)(reply & 0xFFFF);
                 gGba.rxSeq++;
                 consecutiveBad = 0;
-            } else if (++consecutiveBad > 32) {
-                // Link looks dead — drop back to reconnect.
+            } else if (++consecutiveBad > kMaxConsecutiveBad) {
+                // Link looks genuinely dead — drop back to reconnect.
                 break;
             }
 
-            // ~1 kHz poll: plenty for a UI, easy on the slow input line.
-            sleep_us(1000);
+            // ~200 Hz poll. Far more than a UI needs, and deliberately not faster: the GBA
+            // slave can only hold ONE pending transfer, so every poll that lands while it is
+            // re-arming is wasted. Hammering at 1 kHz just manufactured bad words.
+            sleep_us(5000);
         }
     }
 }

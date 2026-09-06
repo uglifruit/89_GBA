@@ -1,21 +1,28 @@
-// payload/main.c — Minimal GBA-side multiboot payload (v0 bidirectional smoke test).
+// payload/main.c — GBA-side multiboot payload for the Workshop Computer link.
 //
 // Runs from EWRAM after the RP2040 uploads it via BIOS Multiboot. It:
-//   1. Puts the LCD in mode 3 (240x160 16bpp bitmap) and fills the screen, proving we booted.
+//   1. Puts the LCD in mode 3 (240x160 16bpp bitmap) and IMMEDIATELY draws the title
+//      "MTM - Workshop Computer Link". This is deliberately the very first thing that
+//      happens, before any serial setup, so the screen alone proves the payload booted and
+//      is executing. A blank screen therefore means the image never ran — a completely
+//      different fault from "ran but the link is quiet", and previously the two were
+//      indistinguishable.
 //   2. Acts as a serial NORMAL-mode 32-bit SLAVE (external clock from the RP2040):
-//        - preloads SIODATA32 with  (0x600D << 16) | buttonBits  before each transfer,
-//        - after each host-clocked word, reads the 4 param bytes the host sent and shows them.
-//   3. Redraws a simple UI: background tint from param[0], four bars from the params, and
-//      button state, so both link directions are visibly working.
+//        - preloads SIODATA32 with (0x600D << 16) | buttonBits before each transfer,
+//        - after each host-clocked word, reads the 4 param bytes the host sent.
+//   3. Redraws only the dynamic strip below the title, so the title stays rock-steady and
+//      each frame is cheap.
 //
-// Deliberately tiny and dependency-free (no libgba) so it builds with a bare arm-none-eabi
-// toolchain targeting armv4t. See build.sh.
+// Dependency-free (no libgba) so it builds with a bare arm-none-eabi toolchain targeting
+// armv4t. See build.sh.
 
 #include <stdint.h>
+#include "font5x7.h"
 
 // ---- GBA memory-mapped I/O ----
 #define REG_BASE        0x04000000
 #define REG_DISPCNT     (*(volatile uint16_t*)(REG_BASE + 0x0000))
+#define REG_VCOUNT      (*(volatile uint16_t*)(REG_BASE + 0x0006))
 #define REG_KEYINPUT    (*(volatile uint16_t*)(REG_BASE + 0x0130))
 #define REG_SIODATA32   (*(volatile uint32_t*)(REG_BASE + 0x0120))
 #define REG_SIOCNT      (*(volatile uint16_t*)(REG_BASE + 0x0128))
@@ -25,22 +32,15 @@
 #define SCREEN_W        240
 #define SCREEN_H        160
 
-// DISPCNT: mode 3 + enable BG2 (the bitmap layer).
 #define MODE3           0x0003
 #define BG2_ON          0x0400
 
-// SIOCNT bits (normal mode):
-//   bit0  : internal clock select (0 = external/slave)  -> we are the slave, so 0
-//   bit2  : SI state (read-only)
-//   bit3  : SO during inactivity (read-only-ish)
-//   bit7  : start/active (master sets 1; for a slave, hardware clears it when a word arrives)
-//   bit12 : transfer length (0 = 8-bit, 1 = 32-bit)  -> 32-bit
-//   bit14 : IRQ enable (unused here; we poll)
+// SIOCNT, normal mode. Mode select is SIOCNT bits 13:12 while RCNT[15:14] == 00:
+//   00 = Normal 8-bit, 01 = Normal 32-bit, 10 = Multiplay, 11 = UART.
+// So 32-bit normal mode is bit12 set, bit13 clear.
 #define SIO_32BIT       (1 << 12)
-#define SIO_START       (1 << 7)
+#define SIO_START       (1 << 7)      // slave sets this to arm; hardware clears on completion
 #define SIO_SLAVE       (0 << 0)      // external clock
-
-// RCNT: 0x0000 selects normal serial mode (not GPIO/JOYBUS).
 #define RCNT_SERIAL     0x0000
 
 static inline uint16_t rgb15(uint8_t r, uint8_t g, uint8_t b)
@@ -48,79 +48,151 @@ static inline uint16_t rgb15(uint8_t r, uint8_t g, uint8_t b)
     return (uint16_t)((r & 31) | ((g & 31) << 5) | ((b & 31) << 10));
 }
 
-static void fill(uint16_t color)
-{
-    volatile uint16_t *p = VRAM;
-    for (int i = 0; i < SCREEN_W * SCREEN_H; i++) p[i] = color;
-}
-
-// Draw a filled rectangle (clipped-free; caller keeps it in bounds).
 static void rect(int x, int y, int w, int h, uint16_t color)
 {
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > SCREEN_W) w = SCREEN_W - x;
+    if (y + h > SCREEN_H) h = SCREEN_H - y;
+    if (w <= 0 || h <= 0) return;
     for (int j = 0; j < h; j++) {
         volatile uint16_t *row = VRAM + (y + j) * SCREEN_W + x;
         for (int i = 0; i < w; i++) row[i] = color;
     }
 }
 
-// Read buttons. REG_KEYINPUT is active-LOW (0 = pressed); invert to active-high and mask
-// to the 10 valid key bits, matching the host's GbaKey layout.
+// Draw one glyph at `scale`. Column-major font: bit r of column c is the pixel at (c, r).
+static void glyph(int x, int y, char ch, uint16_t color, int scale)
+{
+    if ((unsigned char)ch < FONT_FIRST || (unsigned char)ch > FONT_LAST) ch = '?';
+    const uint8_t *g = font5x7[(unsigned char)ch - FONT_FIRST];
+    for (int c = 0; c < FONT_W; c++) {
+        uint8_t col = g[c];
+        for (int r = 0; r < FONT_H; r++) {
+            if (col & (1u << r)) rect(x + c * scale, y + r * scale, scale, scale, color);
+        }
+    }
+}
+
+static int text_width(const char *s, int scale)
+{
+    int n = 0;
+    while (s[n]) n++;
+    return n * FONT_ADV * scale;
+}
+
+static void text(int x, int y, const char *s, uint16_t color, int scale)
+{
+    for (int i = 0; s[i]; i++) glyph(x + i * FONT_ADV * scale, y, s[i], color, scale);
+}
+
+static void text_centre(int y, const char *s, uint16_t color, int scale)
+{
+    text((SCREEN_W - text_width(s, scale)) / 2, y, s, color, scale);
+}
+
 static uint16_t read_buttons(void)
 {
+    // REG_KEYINPUT is active-LOW (0 = pressed); invert and mask to the 10 valid key bits so
+    // it matches the host's GbaKey layout.
     return (uint16_t)(~REG_KEYINPUT) & 0x03FF;
 }
 
+#define COL_BG     rgb15( 2,  3,  8)
+#define COL_TITLE  rgb15(31, 28, 10)
+#define COL_DIM    rgb15( 8,  8, 12)
+#define COL_OK     rgb15( 6, 31, 10)
+#define COL_WAIT   rgb15(31, 14,  4)
+#define COL_BAR    rgb15(10, 22, 31)
+
+#define DYN_Y      52    // dynamic widgets live below this
+
+// ── Link servicing ───────────────────────────────────────────────────────────────────────
+// The slave can only have ONE transfer pending: the hardware clears SIO_START when the host
+// finishes clocking a word, and until we re-arm it we are deaf. The first version blocked in
+// a spin-wait and then spent a whole frame redrawing while UNARMED — the host polls every
+// 1 ms and gives up after a run of bad words, so it disconnected almost immediately.
+//
+// Fix: never block, and re-arm the instant a word lands. service() is cheap and is called
+// between every drawing step, so the slave is armed essentially all of the time.
+static volatile uint32_t g_params = 0;
+static volatile uint32_t g_rx     = 0;
+static uint16_t g_buttons = 0;
+
+static void service(void)
+{
+    if (!(REG_SIOCNT & SIO_START)) {          // a word completed (or we have never armed)
+        g_params = REG_SIODATA32;
+        g_rx++;
+        REG_SIODATA32 = (0x600Du << 16) | g_buttons;   // preload our reply
+        REG_SIOCNT |= SIO_START;                       // re-arm; also pulls SO low = ready
+    }
+}
+
+// Draw helpers that keep the link serviced while they work.
+static void srect(int x, int y, int w, int h, uint16_t color) { rect(x, y, w, h, color); service(); }
+
 int main(void)
 {
-    // ---- LCD: mode 3 bitmap ----
+    // ---- 1. LCD up and TITLE DRAWN FIRST — the boot proof ----
     REG_DISPCNT = MODE3 | BG2_ON;
+    rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);
+    text_centre(14, "MTM - Workshop Computer Link", COL_TITLE, 1);
+    rect(20, 30, SCREEN_W - 40, 1, COL_DIM);
 
-    // ---- Serial: normal mode, 32-bit, slave (external clock) ----
-    REG_RCNT  = RCNT_SERIAL;
+    // ---- 2. Serial: normal mode, 32-bit, slave (external clock from the RP2040) ----
+    REG_RCNT   = RCNT_SERIAL;
     REG_SIOCNT = SIO_32BIT | SIO_SLAVE;
+    REG_SIODATA32 = (0x600Du << 16);
+    REG_SIOCNT |= SIO_START;                   // arm immediately
 
-    uint32_t params = 0;   // last 4 bytes received from the host (p0<<24|p1<<16|p2<<8|p3)
+    uint32_t lastRx = 0;
+    int      linkUp = 0, quiet = 0;
 
     for (;;) {
-        uint16_t buttons = read_buttons();
+        g_buttons = read_buttons();
+        service();
 
-        // Preload our outgoing word for the next host-clocked transfer.
-        REG_SIODATA32 = (0x600Du << 16) | buttons;
+        uint32_t rx = g_rx;
+        if (rx != lastRx) { lastRx = rx; linkUp = 1; quiet = 0; }
+        else if (++quiet > 90) { linkUp = 0; }
 
-        // Arm the slave: set the active bit; the GBA hardware clears it once the master
-        // has clocked a full 32-bit word in/out.
-        REG_SIOCNT |= SIO_START;
+        uint32_t params = g_params;
 
-        // Poll for the transfer to complete, but don't hang forever if the host is idle —
-        // fall through and redraw so the screen stays live (and buttons keep updating).
-        int spins = 0;
-        while (REG_SIOCNT & SIO_START) {
-            if (++spins > 200000) break;   // ~ a few ms; host poll is ~1 kHz
-        }
-        if (!(REG_SIOCNT & SIO_START)) {
-            params = REG_SIODATA32;        // 4 param bytes the host just sent
-        }
+        // ---- 3. Redraw only the small dynamic widgets, servicing between each ----
+        // A full-strip clear each frame cost ~26k pixels; these targeted erases cost a
+        // fraction of that, which keeps the deaf window short.
+        srect(0, DYN_Y, SCREEN_W, 9, COL_BG);
+        text_centre(DYN_Y, linkUp ? "LINK OK" : "WAITING FOR HOST",
+                    linkUp ? COL_OK : COL_WAIT, 1);
+        service();
 
-        // ---- redraw: prove both directions ----
-        uint8_t p0 = (params >> 24) & 0xFF;
-        uint8_t p1 = (params >> 16) & 0xFF;
-        uint8_t p2 = (params >>  8) & 0xFF;
-        uint8_t p3 = (params >>  0) & 0xFF;
+        // Activity pip: steps across on every received word, so liveness is visible even if
+        // the params themselves are wrong.
+        srect(0, DYN_Y + 12, SCREEN_W, 4, COL_BG);
+        srect(8 + (int)((rx >> 2) % 28) * 8, DYN_Y + 12, 6, 4, linkUp ? COL_OK : COL_DIM);
 
-        // Background tint driven by p0 (host Knob Main) — visibly changes as you turn it.
-        fill(rgb15(p0 >> 3, 8, 16));
-
-        // Four vertical bars for the four params.
-        const uint8_t vals[4] = { p0, p1, p2, p3 };
-        for (int k = 0; k < 4; k++) {
-            int h = 1 + (vals[k] * (SCREEN_H - 20)) / 255;
-            rect(20 + k * 50, SCREEN_H - 10 - h, 30, h, rgb15(31, 31, 31));
-        }
-
-        // Button indicators along the top: lit white when pressed.
+        // Button indicators.
         for (int b = 0; b < 10; b++) {
-            uint16_t c = (buttons & (1 << b)) ? rgb15(31, 31, 0) : rgb15(4, 4, 4);
-            rect(6 + b * 22, 6, 18, 10, c);
+            uint16_t c = (g_buttons & (1u << b)) ? COL_TITLE : COL_DIM;
+            srect(6 + b * 23, DYN_Y + 20, 19, 8, c);
         }
+
+        // Four bars for the four host params.
+        const int barTop = DYN_Y + 34;
+        const int maxh   = SCREEN_H - barTop - 6;
+        const uint8_t vals[4] = {
+            (uint8_t)(params >> 24), (uint8_t)(params >> 16),
+            (uint8_t)(params >>  8), (uint8_t)(params)
+        };
+        for (int k = 0; k < 4; k++) {
+            int h = 1 + (vals[k] * maxh) / 255;
+            srect(22 + k * 52, barTop, 34, maxh, COL_BG);          // erase the column
+            srect(22 + k * 52, SCREEN_H - 6 - h, 34, h, COL_BAR);  // draw the bar
+        }
+
+        // Pace to roughly one frame without blocking the link: poll VCOUNT while servicing.
+        while (REG_VCOUNT <  SCREEN_H) service();
+        while (REG_VCOUNT >= SCREEN_H) service();
     }
 }

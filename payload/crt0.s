@@ -43,6 +43,17 @@ _headerstart:
 _start:
 _start_cart:
     ldr sp, =0x03007F00             @ IWRAM (system) stack
+
+    @ Zero .bss. The section is NOLOAD, so it is NOT part of the multiboot image — whatever
+    @ EWRAM happened to contain is still sitting there. C guarantees zero-initialised statics,
+    @ so without this any static/global in the payload starts as garbage. Cheap insurance.
+    ldr r0, =__bss_start
+    ldr r1, =__bss_end
+    mov r2, #0
+1:  cmp r0, r1
+    strlo r2, [r0], #4
+    blo 1b
+
     ldr r0, =main
     bx  r0                          @ enter main() (ARM)
 
