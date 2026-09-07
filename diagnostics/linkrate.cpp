@@ -12,37 +12,43 @@
 // repeated measurement, so a failure here always means the live link, never the upload.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────
-// WHAT THE GBA SHOWS — a 0 -> FFFF RAMP
-//     The host counts 0 to FFFF over and over. The bar fills as the current pass advances.
-//     If a word is dropped or corrupted the bar turns amber and a red mark shows exactly
-//     where it broke; the next pass starts clean. Below, tallies of CLEAN and BAD passes,
-//     and a verdict: RELIABLE / DROPPING WORDS / MEASURING.
+// WHAT THIS ACTUALLY MEASURES — and why it changed
 //
-//     A full pass is 65536 words, so it takes a while at low rates:
-//         50 kHz ~42 s    100 kHz ~21 s    200 kHz ~10 s
-//        400 kHz  ~5 s    600 kHz  ~4 s      1 MHz  ~2 s
-//     Wait for at least two or three CLEAN passes before believing a rate. One clean pass
-//     proves nothing — assuming otherwise is what produced the wandering multiboot answer.
+// The first version stepped the SCK rate and sent words BACK-TO-BACK with no gap. It showed
+// heavy corruption even at 50 kHz, which contradicted a link that had been working reliably
+// the day before. The contradiction was the clue: the working link polled every 5000 us.
 //
-// WORKSHOP LEDS — exactly one lit, showing the rate slot. YOU choose it; the tool never
-// changes it by itself.
-//     LED0  50 kHz     LED1 100 kHz    LED2 200 kHz
-//     LED3 400 kHz     LED4 600 kHz    LED5   1 MHz
-// SOLID while upstream replies are framed correctly, BLINKING when the host is seeing bad
-// words. The GBA screen covers the downstream direction, so between the two both are visible.
-// While the payload is uploading the current LED pulses slowly — deliberately not a sweep
-// across all six, which looked exactly like the tool stepping speeds on its own.
+// The GBA slave holds exactly ONE pending transfer, and it re-arms with a read-modify-write
+// of SIOCNT. With no inter-word gap the host starts clocking the next word before the slave
+// has re-armed, so that race fires on nearly every word — producing exactly the dropped words
+// and bit-slips observed. SCK was never the limiting variable; the slave's TURNAROUND is.
+//
+// So this now sweeps the WORD RATE at a fixed, proven 100 kHz SCK. That is also the number
+// the project actually needs: how many control updates per second the link sustains.
+//
+// WORKSHOP LEDS — exactly one lit, showing the word rate. YOU choose it.
+//     LED0  100 Hz     LED1  200 Hz   <- 200 Hz is what the working link used
+//     LED2  500 Hz     LED3    1 kHz
+//     LED4    2 kHz    LED5    3 kHz  <- 3 kHz is the ceiling at 100 kHz SCK (320 us/word)
+// SOLID while upstream replies are framed correctly, BLINKING when the host sees bad words.
+// While the payload uploads, the current LED pulses slowly.
+//
+// WHAT THE GBA SHOWS — a 0 -> 0FFF ramp (4096 words)
+//     The bar fills as the pass advances; a break turns it amber and marks the point in red.
+//     DROPPED counts small gaps (lost words), SLIP counts wild jumps (bit-shift on re-arm),
+//     CORRUPT counts words matching neither magic. CLEAN/BAD passes below.
+//     The ramp is 4096 words rather than 65536 because at 100 Hz a full 16-bit ramp would
+//     take five and a half minutes.
+//     The screen FREEZES during a pass: drawing makes the payload deaf, so measuring and
+//     drawing cannot overlap without measuring our own redraws instead of the link.
 //
 // CONTROLS
 //     DOWN click = next rate up      UP click = previous rate down
 //
 // PROTOCOL
 //     Host -> GBA   0xA5A5 <value:16>   the ramp, +1 per word; a gap is a dropped word
-//                   0xA6A6 <rateKHz:16> current rate, so the GBA can display and reset on it
-//     The magics are 16 bits wide on purpose. With 8-bit magics (0xA5 / 0xA6, two bits apart)
-//     a bit-shifted ramp word could pass as a rate message, and the displayed SCK jumped
-//     between 100 and 40000. Words matching neither magic are now counted as corruption.
-//     GBA  -> host  0x600D <value:16>  where the GBA thinks the ramp has got to
+//                   0xA6A6 <rateHz:16>  current WORD rate in Hz, for display and reset
+//     GBA  -> host  0x600D <value:16>   where the GBA thinks the ramp has got to
 
 #include "ComputerCard.h"
 #include "gba_spi.h"
@@ -53,7 +59,17 @@
 #include "pico/multicore.h"
 
 static constexpr uint32_t kMultibootHz = 100'000;   // proven by mbrate.uf2; do not raise
-static const uint32_t kRates[6] = { 50'000, 100'000, 200'000, 400'000, 600'000, 1'000'000 };
+// WORD rates, not clock rates. SCK stays at the proven 100 kHz throughout; what is being
+// swept is how hard the slave is pushed, because that is the real constraint.
+static const uint32_t kWordHz[6] = { 100, 200, 500, 1000, 2000, 3000 };
+
+// Inter-word gap for a given word rate, minus the ~320 us the 32-bit word itself takes at
+// 100 kHz. Clamped at zero for the top rung, which is therefore the back-to-back case.
+static uint32_t gapUsFor(uint32_t wordHz)
+{
+    uint32_t period = 1'000'000u / wordHz;
+    return (period > 340u) ? (period - 340u) : 0u;
+}
 
 struct Shared {
     volatile uint8_t  slot     = 1;   // start at 100 kHz, the known-good rate
@@ -86,22 +102,26 @@ static void core1_entry()
             uint8_t s = gS.slot;
             if (s != lastSlot) {
                 lastSlot = s;
-                gba_spi_set_clock(kRates[s]);
                 sinceRate = 0;
                 // Announce the new rate immediately and repeatedly: the GBA resets its counts
                 // when the rate changes, and until it hears about it the figures on screen
                 // would describe a blend of two rates.
                 for (int i = 0; i < 8; i++) {
-                    gba_spi_xfer32(0xA6A60000u | (kRates[s] / 1000u));
+                    gba_spi_xfer32(0xA6A60000u | kWordHz[s]);
                     sleep_us(300);
                 }
             }
 
             // Ramp a 16-bit counter 0 -> 0xFFFF, over and over. The GBA plots how far each
             // pass gets, so a full clean sweep is visible as a full bar.
-            uint32_t r = gba_spi_xfer32(0xA5A50000u | (seq & 0xFFFFu));
+            uint32_t r = gba_spi_xfer32(0xA5A50000u | (seq & 0x0FFFu));
             seq++;
             gS.sent = seq;
+
+            // THE GAP IS THE POINT. Without it the slave never finishes re-arming before the
+            // next word starts, which is what made every rate look broken.
+            uint32_t g = gapUsFor(kWordHz[s]);
+            if (g) sleep_us(g);
 
             if ((r >> 16) == 0x600D) {
                 gS.upstreamOk = true;
@@ -122,7 +142,7 @@ static void core1_entry()
             // the display permanently wrong.
             if (++sinceRate > 2000) {
                 sinceRate = 0;
-                gba_spi_xfer32(0xA6A60000u | (kRates[s] / 1000u));
+                gba_spi_xfer32(0xA6A60000u | kWordHz[s]);
             }
         }
     }

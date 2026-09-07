@@ -191,7 +191,7 @@ static volatile int g_benchDirty = 1;   // screen needs repainting for the curre
 // completes, repeatably, at a given rate is the actual question — and this answers it at a
 // glance instead of by comparing two numbers.
 static volatile int      g_linkTest = 0;
-static volatile uint32_t g_ltRate   = 0;   // kHz
+static volatile uint32_t g_ltRate   = 0;   // WORD rate in Hz (SCK is fixed at 100 kHz)
 static volatile uint32_t g_ltVal    = 0;   // current value in this pass
 static volatile uint32_t g_ltFailAt = 0;   // where this pass broke
 static volatile int      g_ltFailed = 0;   // this pass has broken
@@ -250,7 +250,7 @@ static void service(void)
             uint32_t mag = got >> 16;
             if (mag == LT_SEQ_MAGIC) {
                 g_linkTest = 1;
-                uint16_t v = (uint16_t)(got & 0xFFFFu);
+                uint16_t v = (uint16_t)(got & 0x0FFFu);   // 12-bit ramp: 4096 words
                 if (!g_ltMeasuring) {
                     g_ltPrev = v; g_ltHave = 0;     // drawing: track position, judge nothing
                 } else if (!g_ltHave) {
@@ -331,18 +331,18 @@ int main(void)
             g_ltMeasuring = 0;                       // drawing: judge nothing that arrives now
 
             rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);
-            text_centre(6, "LINK 0-FFFF RAMP", COL_TITLE, 1);
+            text_centre(6, "LINK 0-0FFF RAMP", COL_TITLE, 1);
 
             dec32(buf, g_ltRate, 5);
-            text(36, 22, "SCK", COL_DIM, 1);
-            text(68, 20, buf, COL_HEX, 2);
-            text(168, 28, "kHz", COL_DIM, 1);
+            text(24, 22, "RATE", COL_DIM, 1);
+            text(64, 20, buf, COL_HEX, 2);
+            text(174, 28, "wds/s", COL_DIM, 1);
 
             // Result of the pass just finished.
             rect(BAR_X - 2, BAR_Y - 2, BAR_W + 4, BAR_H + 4, COL_DIM);
             rect(BAR_X, BAR_Y, BAR_W, BAR_H, COL_BG);
             if (g_ltHave) {
-                int w = g_ltFailed ? (int)(((uint64_t)g_ltFailAt * BAR_W) / 0xFFFFu) : BAR_W;
+                int w = g_ltFailed ? (int)(((uint64_t)g_ltFailAt * BAR_W) / 0x0FFFu) : BAR_W;
                 if (w > 0) rect(BAR_X, BAR_Y, w, BAR_H, g_ltFailed ? COL_WAIT : COL_OK);
                 if (g_ltFailed) rect(BAR_X + w, BAR_Y - 4, 2, BAR_H + 8, COL_FAIL);
             }
@@ -352,7 +352,7 @@ int main(void)
                 text(BAR_X, BAR_Y + BAR_H + 6, "BROKE AT", COL_DIM, 1);
                 text(BAR_X + 70, BAR_Y + BAR_H + 6, buf + 4, COL_FAIL, 1);
             } else if (g_ltHave) {
-                text(BAR_X, BAR_Y + BAR_H + 6, "FULL RAMP 0000-FFFF OK", COL_OK, 1);
+                text(BAR_X, BAR_Y + BAR_H + 6, "FULL RAMP 000-FFF OK", COL_OK, 1);
             }
 
             // What kind of discontinuity, which is the question that distinguishes causes.
