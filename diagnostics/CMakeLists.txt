@@ -142,3 +142,17 @@ pico_add_extra_outputs(mbrate)
 target_compile_definitions(mbrate PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
 pico_enable_stdio_usb(mbrate 0)
 target_compile_options(mbrate PRIVATE -Wall -Wextra)
+
+# Post-boot link speed test: boots at 100 kHz, then steps the live rate by hand.
+add_executable(linkrate
+    linkrate.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gba_multiboot.cpp)
+pico_generate_pio_header(linkrate ${CMAKE_CURRENT_LIST_DIR}/../gba_spi.pio)
+target_include_directories(linkrate PUBLIC ${CMAKE_CURRENT_LIST_DIR}/..)
+target_link_libraries(linkrate
+    pico_unique_id pico_stdlib hardware_dma hardware_i2c hardware_pwm
+    hardware_adc hardware_spi hardware_pio pico_multicore)
+pico_add_extra_outputs(linkrate)
+target_compile_definitions(linkrate PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
+pico_enable_stdio_usb(linkrate 0)
+target_compile_options(linkrate PRIVATE -Wall -Wextra)

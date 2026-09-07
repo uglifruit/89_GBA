@@ -99,6 +99,17 @@ static void hex32(char *out, uint32_t v)
     out[8] = 0;
 }
 
+// Right-aligned decimal into a fixed field. Counts and kHz are much easier to read as
+// decimal than hex, and this screen exists to be read at a glance from the bench.
+static void dec32(char *out, uint32_t v, int width)
+{
+    for (int i = 0; i < width; i++) out[i] = ' ';
+    out[width] = 0;
+    int i = width - 1;
+    if (v == 0) { out[i] = '0'; return; }
+    while (v && i >= 0) { out[i--] = (char)('0' + (v % 10)); v /= 10; }
+}
+
 static uint16_t read_buttons(void)
 {
     // REG_KEYINPUT is active-LOW (0 = pressed); invert and mask to the 10 valid key bits so
@@ -150,6 +161,21 @@ static volatile int g_benchDirty = 1;   // screen needs repainting for the curre
 // AUTO-ANALYSIS of the incoming stream. Reading a flickering hex line and guessing what it
 // said has now misled this investigation twice, so the payload classifies every word itself
 // and shows running totals. Totals cannot flicker: they only ever count up.
+// ── LINK SPEED TEST (diagnostics/linkrate.uf2) ───────────────────────────────────────────
+// The host streams sequence-numbered words at a rate you pick by hand; the GBA checks the
+// sequence for gaps and reports the result ON ITS OWN SCREEN. Putting the readout here rather
+// than on six LEDs is the whole point: this console has a display, and every number that has
+// had to be decoded from blinking LEDs in this project has cost a bench cycle.
+//   0xA5______  low 24 bits = sequence counter, incrementing by 1
+//   0xA6____xx  low 16 bits = the current SCK rate in kHz, for display
+#define LT_SEQ_MAGIC  0xA5u
+#define LT_RATE_MAGIC 0xA6u
+static volatile int      g_linkTest = 0;
+static volatile uint32_t g_ltSeq  = 0;
+static volatile uint32_t g_ltRx   = 0;
+static volatile uint32_t g_ltErr  = 0;
+static volatile uint32_t g_ltRate = 0;   // kHz
+
 static volatile int      g_enterHits = 0;   // words exactly == BENCH_ENTER
 static volatile int      g_nearHits  = 0;   // words within 4 bits of BENCH_ENTER (corruption)
 static volatile int      g_be7cHits  = 0;   // words whose TOP half is 0xBE7C (partial match)
@@ -182,8 +208,28 @@ static void service(void)
             if ((got >> 16) == 0xBE7Cu) { g_be7cHits++; g_lastBe7c = got; }
         }
 
-        REG_SIODATA32 = g_bench ? ((0x600Du << 16) | (got & 0xFFFFu))   // echo
-                                : ((0x600Du << 16) | g_buttons);        // normal reply
+        // Link speed test: a gap in the sequence is a dropped or corrupted word, which is
+        // exactly the reliability figure the rate sweep needs.
+        {
+            uint32_t mag = got >> 24;
+            if (mag == LT_SEQ_MAGIC) {
+                g_linkTest = 1;
+                uint32_t seq = got & 0x00FFFFFFu;
+                if (g_ltRx && seq != ((g_ltSeq + 1) & 0x00FFFFFFu)) g_ltErr++;
+                g_ltSeq = seq;
+                g_ltRx++;
+            } else if (mag == LT_RATE_MAGIC) {
+                g_linkTest = 1;
+                // A rate change restarts the count, so the figures on screen always describe
+                // the rate shown beside them and never a blend of two.
+                if ((got & 0xFFFFu) != g_ltRate) { g_ltRate = got & 0xFFFFu; g_ltRx = 0; g_ltErr = 0; }
+                g_benchDirty = 1;
+            }
+        }
+
+        REG_SIODATA32 = g_bench      ? ((0x600Du << 16) | (got & 0xFFFFu))          // echo
+                      : g_linkTest   ? ((0x600Du << 16) | (g_ltErr & 0xFFFFu))      // error count
+                                     : ((0x600Du << 16) | g_buttons);               // normal
         REG_SIOCNT |= SIO_START;                       // re-arm; also pulls SO low = ready
     }
 }
@@ -211,6 +257,44 @@ int main(void)
     for (;;) {
         g_buttons = read_buttons();
         service();
+
+        // ── LINK SPEED TEST SCREEN ───────────────────────────────────────────────────────
+        // Reports the rate the host is using and how many sequence gaps have been seen at it.
+        // Drawn sparingly and with service() between every element, so the measurement is not
+        // corrupted by the act of displaying it.
+        if (g_linkTest && !g_bench) {
+            char buf[12];
+            uint32_t rx = g_ltRx, err = g_ltErr;
+
+            if (g_benchDirty) {                     // rate changed: repaint the fixed parts
+                g_benchDirty = 0;
+                rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);  service();
+                text_centre(10, "LINK SPEED TEST", COL_TITLE, 1); service();
+            }
+
+            srect(0, 30, SCREEN_W, 60, COL_BG);
+
+            dec32(buf, g_ltRate, 6);
+            text(30, 32, "SCK", COL_DIM, 1); text(64, 32, buf, COL_HEX, 2);
+            text(190, 40, "kHz", COL_DIM, 1); service();
+
+            dec32(buf, rx, 8);
+            text(30, 58, "WORDS", COL_DIM, 1); text(96, 58, buf, COL_HEX, 1); service();
+
+            dec32(buf, err, 8);
+            text(30, 68, "ERRORS", COL_DIM, 1);
+            text(96, 68, buf, err ? COL_WAIT : COL_OK, 1); service();
+
+            // Verdict in words. A count of zero errors over a large sample is the only thing
+            // that means "reliable", and it should not need arithmetic to see.
+            srect(0, 86, SCREEN_W, 22, COL_BG);
+            if (rx < 500)      text_centre(90, "MEASURING", COL_DIM,  2);
+            else if (err == 0) text_centre(90, "CLEAN",     COL_OK,   2);
+            else               text_centre(90, "ERRORS",    COL_WAIT, 2);
+
+            for (int i = 0; i < 400; i++) service();
+            continue;
+        }
 
         // BENCH: service as tightly as possible and draw nothing. This measures the transport
         // ceiling itself; comparing it against the normal path shows what the UI costs.
