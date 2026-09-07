@@ -180,10 +180,21 @@ time, chosen by hand, with repeated power-cycles. A single success is not reliab
 |---|---|
 | SCK | 100 kHz (proven; higher was never fairly tested — see below) |
 | **Sustained word rate** | **2000 words/s clean** — 25 passes, zero errors |
+| 3000 words/s | fails — and for a *known* reason, see below |
 | Throughput | ~64 kbit/s each way |
 | Round-trip latency | ≤0.5 ms at 2000 words/s |
 
 **The applet now polls at 1 kHz**, half the proven rate, giving 1 ms latency instead of 5 ms.
+
+**Why 3000 fails, and what the real limit is.** At 100 kHz SCK a 32-bit word occupies 320 µs.
+At 2000 words/s the period is 500 µs, leaving a 180 µs gap — clean. At 3000 words/s the period
+is 333 µs, so the gap collapses to nothing and it becomes the back-to-back case that was
+already proved to defeat the slave's re-arm. It is the same failure, not a new one.
+
+So the governing quantity is **the slave's minimum re-arm gap**, which these two points bracket
+between roughly 13 µs and 180 µs. Going faster is a matter of raising SCK to shorten the word
+and leave room for that gap — not of pushing the word rate against a wall. Nothing planned
+needs it.
 
 Two earlier readings were wrong, and both were the instrument rather than the link:
 
