@@ -105,15 +105,24 @@ static inline uint32_t xfer(uint32_t w)
 
 bool gba_wait_slave_ready(uint32_t timeoutMs)
 {
-    // The pad reads the GBA's SO line directly (GBA_MISO_INOVER already corrects for the
-    // Workshop's inverting input stage), so this needs no transfers and consumes no protocol
-    // state — it is purely an observation.
-    absolute_time_t deadline = make_timeout_time_ms(timeoutMs);
-    while (!time_reached(deadline)) {
-        if (!gpio_get(GBA_MISO_PIN)) return true;    // SO low = slave ready
-        sleep_us(200);
-    }
-    return false;
+    // DO NOT REINTRODUCE A LEVEL TEST HERE.
+    //
+    // This used to wait for the MISO pad to read LOW, on the strength of a cablecheck MODE 2
+    // observation that "Pulse In 1 sits low when the GBA is ready". That observation was taken
+    // while GBA_MISO_INOVER was NORMAL. The polarity was later proved to be INVERT, so the
+    // very same physical state now reads the OPPOSITE way through gpio_get() — the condition
+    // could never become true, the wait always ran to timeout, and any caller that GATED on it
+    // never attempted multiboot at all. That broke transfers completely at every speed.
+    //
+    // The real readiness test is the protocol's own: gba_multiboot_send() already opens with a
+    // bounded sync loop that sends 0x6202 until 0x7202 comes back, and returns NoGBA promptly
+    // if the console is not listening. That is polarity-independent, needs no assumption about
+    // pad levels, and was working before this helper existed.
+    //
+    // Kept only so callers still compile. It is a plain settle delay and its result carries no
+    // information, so it must never be used as a gate.
+    sleep_ms(timeoutMs < 20 ? timeoutMs : 20);
+    return true;
 }
 
 MultibootResult gba_multiboot_send(const uint8_t *rom, size_t rom_size)

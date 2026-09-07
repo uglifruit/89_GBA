@@ -75,12 +75,11 @@ static void core1_entry()
 
         gba_spi_set_clock(kSpeeds[s]);
 
-        // Wait for the console to actually be in its BIOS wait state before attempting.
-        // Without this, an attempt made while the GBA is still showing the logo fails for
-        // reasons that have nothing to do with the speed under test — which is precisely the
-        // confound this tool exists to remove.
-        if (!gba_wait_slave_ready(3000)) { gS.trying = false; continue; }
-
+        // Just attempt it. gba_multiboot_send() opens with its own bounded sync loop and
+        // returns NoGBA promptly if the console is not listening yet, so a failed attempt
+        // costs little and simply retries. An earlier version gated this on a pad-level
+        // readiness check whose polarity was wrong, and consequently never attempted a
+        // transfer at any speed.
         gS.trying = true;
         gS.attempts++;
         MultibootResult r = gba_multiboot_send(gba_payload, gba_payload_size);
@@ -90,12 +89,8 @@ static void core1_entry()
             gS.ok = true;
             gS.okCount++;
             // The GBA is now running the payload and will not accept another image until it
-            // is power-cycled, so there is nothing to gain from hammering. Idle until the
-            // console goes away and comes back.
-            while (gS.slot == lastSlot) {
-                if (!gba_wait_slave_ready(500)) continue;   // still booted: keep waiting
-                break;                                      // ready again = it was restarted
-            }
+            // is power-cycled. Idle in short steps so a speed change stays responsive.
+            while (gS.slot == lastSlot) sleep_ms(50);
         } else {
             sleep_ms(200);
         }

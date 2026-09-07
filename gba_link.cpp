@@ -63,12 +63,6 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
         // ---- (re)connect: walk the rate ladder until multiboot succeeds ----
         gGba.state = LinkState::Connecting;
 
-        // Wait for the slave-ready signal before walking the ladder. A multiboot attempt can
-        // only succeed once the console is in its BIOS wait state, so without this the rung
-        // that "wins" is set by when the GBA was switched on rather than by what the link can
-        // sustain — and it lands somewhere different every time.
-        gba_wait_slave_ready(5'000);
-
         MultibootResult r = MultibootResult::NoGBA;
         int tried = 0;
         for (; tried < kLadderLen; tried++) {

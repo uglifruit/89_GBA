@@ -30,17 +30,12 @@ enum class MultibootResult : uint8_t {
 // to simply retry (that's the normal "waiting for the GBA to be ready" state).
 MultibootResult gba_multiboot_send(const uint8_t *rom, size_t rom_size);
 
-// Wait until the GBA signals it is ready to receive a multiboot image, or `timeoutMs`
-// elapses. Returns true if the slave-ready signal was seen.
+// DEPRECATED — a short settle delay, nothing more. It returns true unconditionally and its
+// result carries no information, so NEVER gate on it.
 //
-// WHY THIS MATTERS. A multiboot attempt only succeeds if the console is ALREADY sitting in
-// its BIOS wait state; while it is still showing the logo, every attempt fails no matter what
-// clock rate is used. So a "try each rate, fastest first, keep the first that works" ladder
-// does not find the fastest workable rate at all — it finds whichever rung it happened to be
-// on at the moment the GBA became ready. That makes the winning rate vary run to run
-// depending on when the console was switched on, which is exactly what shows up on the bench.
-//
-// GBATEK, master init: "Wait for SI to become LOW (slave ready). (Check timeout here!)" The
-// GBA pulls its SO low when ready, and that arrives on our MISO pin — so this is checkable
-// before committing to any rate, with no protocol state consumed.
+// It once tested the MISO pad for a low level, based on an observation made while the pad
+// inversion was set the other way round. When the polarity was corrected the test inverted
+// its meaning, always timed out, and callers that gated on it stopped attempting multiboot
+// entirely. The protocol's own bounded sync loop inside gba_multiboot_send() is the correct
+// readiness test: it is polarity-independent and returns NoGBA promptly when nothing answers.
 bool gba_wait_slave_ready(uint32_t timeoutMs);
