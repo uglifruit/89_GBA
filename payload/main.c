@@ -198,6 +198,17 @@ static volatile int      g_ltFailed = 0;   // this pass has broken
 static volatile uint32_t g_ltPassOk = 0;   // passes that reached 0xFFFF cleanly
 static volatile uint32_t g_ltPassBad= 0;   // passes that broke
 static volatile uint32_t g_ltBadMagic = 0;   // words matching neither magic
+// MEASURING WINDOW. The payload is deaf whenever it draws, so a ramp that runs while the
+// screen is being updated can never complete — it breaks once per frame, for ever, no matter
+// how good the link is. That is our own redraw behaviour, not a property of the rate, and
+// mixing the two makes the measurement meaningless.
+//
+// So the pass is measured with the screen FROZEN: draw the previous result, then service
+// tightly for a whole 0->FFFF ramp without drawing at all, then draw the outcome.
+static volatile int      g_ltMeasuring = 0;
+static volatile int      g_ltPassDone  = 0;
+static volatile uint32_t g_ltSkips     = 0;   // small gaps: dropped words
+static volatile uint32_t g_ltWild      = 0;   // large jumps: bit-slip / corruption
 static uint16_t g_ltPrev = 0;
 static int      g_ltHave = 0;
 
@@ -240,13 +251,26 @@ static void service(void)
             if (mag == LT_SEQ_MAGIC) {
                 g_linkTest = 1;
                 uint16_t v = (uint16_t)(got & 0xFFFFu);
-                if (v == 0) {                       // wrap: score the pass just finished
-                    if (g_ltHave) { if (g_ltFailed) g_ltPassBad++; else g_ltPassOk++; }
-                    g_ltFailed = 0; g_ltFailAt = 0;
-                } else if (g_ltHave && v != (uint16_t)(g_ltPrev + 1)) {
-                    if (!g_ltFailed) { g_ltFailed = 1; g_ltFailAt = g_ltPrev; }
+                if (!g_ltMeasuring) {
+                    g_ltPrev = v; g_ltHave = 0;     // drawing: track position, judge nothing
+                } else if (!g_ltHave) {
+                    g_ltPrev = v; g_ltHave = 1; g_ltVal = v;
+                } else {
+                    uint16_t expect = (uint16_t)(g_ltPrev + 1);
+                    if (v < g_ltPrev) {
+                        // Value went backwards = the ramp wrapped. Detecting the wrap this way
+                        // rather than by waiting for exactly 0 matters: if that one word is
+                        // dropped, waiting for it would hang the pass for ever.
+                        g_ltPassDone = 1;
+                    } else if (v != expect) {
+                        // Classify the discontinuity, which is the question worth asking: a
+                        // small gap is dropped words, a wild jump is a bit-slip.
+                        uint16_t gap = (uint16_t)(v - expect);
+                        if (gap <= 8) g_ltSkips++; else g_ltWild++;
+                        if (!g_ltFailed) { g_ltFailed = 1; g_ltFailAt = g_ltPrev; }
+                    }
+                    g_ltPrev = v; g_ltVal = v;
                 }
-                g_ltPrev = v; g_ltHave = 1; g_ltVal = v;
             } else if (mag == LT_RATE_MAGIC) {
                 g_linkTest = 1;
                 // A rate change restarts everything, so what is on screen always describes the
@@ -257,10 +281,10 @@ static void service(void)
                     g_ltFailed = 0; g_ltFailAt = 0; g_ltHave = 0; g_ltVal = 0;
                     g_benchDirty = 1;
                 }
-            } else if (g_linkTest) {
-                // Neither magic: the word is corrupt (most likely bit-shifted by the slave
-                // re-arming mid-transfer). Count it directly rather than waiting for it to
-                // show up as a sequence gap.
+            } else if (g_linkTest && g_ltMeasuring) {
+                // Neither magic: corrupt, most likely bit-shifted by the slave re-arming mid
+                // transfer. Only counted while MEASURING — outside the window we are drawing,
+                // and words missed then are our own doing rather than the link's.
                 g_ltBadMagic++;
                 if (!g_ltFailed) { g_ltFailed = 1; g_ltFailAt = g_ltPrev; }
             }
@@ -297,65 +321,70 @@ int main(void)
         g_buttons = read_buttons();
         service();
 
-        // ── LINK SPEED TEST: 0 -> FFFF RAMP ──────────────────────────────────────────────
-        // The host counts 0 to FFFF over and over. The bar shows how far the current pass has
-        // got; if a word is dropped or mangled the pass is marked and the break point is
-        // drawn as a red mark, so a glance says whether a full sweep completes cleanly at
-        // this rate. PASS/FAIL tallies below make repeatability visible without arithmetic.
+        // ── LINK SPEED TEST: one full 0 -> FFFF ramp per pass, screen frozen ─────────────
+        // Draw the LAST pass, then freeze the display and service tightly for a whole ramp.
+        // Drawing and measuring cannot overlap: the payload is deaf while it draws, so a ramp
+        // running across a redraw breaks once per frame regardless of how good the link is.
+        // Separating them is what makes "did a full 0-FFFF sweep complete cleanly" answerable.
         if (g_linkTest && !g_bench) {
             char buf[12];
-            uint32_t v = g_ltVal, failAt = g_ltFailAt;
-            int failed = g_ltFailed;
+            g_ltMeasuring = 0;                       // drawing: judge nothing that arrives now
 
-            if (g_benchDirty) {                       // rate changed: repaint fixed furniture
-                g_benchDirty = 0;
-                rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);
-                text_centre(8, "LINK 0-FFFF RAMP", COL_TITLE, 1);
-                rect(BAR_X - 2, BAR_Y - 2, BAR_W + 4, BAR_H + 4, COL_DIM);
-            }
+            rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);
+            text_centre(6, "LINK 0-FFFF RAMP", COL_TITLE, 1);
 
             dec32(buf, g_ltRate, 5);
-            srect(0, 24, SCREEN_W, 18, COL_BG);
-            text(40, 26, "SCK", COL_DIM, 1);
-            text(72, 24, buf, COL_HEX, 2);
-            text(170, 32, "kHz", COL_DIM, 1);
+            text(36, 22, "SCK", COL_DIM, 1);
+            text(68, 20, buf, COL_HEX, 2);
+            text(168, 28, "kHz", COL_DIM, 1);
 
-            // The bar itself.
-            rect(BAR_X, BAR_Y, BAR_W, BAR_H, COL_BG);          service();
-            int w = (int)(((uint64_t)v * BAR_W) / 0xFFFFu);
-            if (w > 0) rect(BAR_X, BAR_Y, w, BAR_H, failed ? COL_WAIT : COL_OK);
-            service();
-            if (failed) {                                       // mark where it broke
-                int fx = (int)(((uint64_t)failAt * BAR_W) / 0xFFFFu);
-                rect(BAR_X + fx, BAR_Y - 4, 2, BAR_H + 8, COL_FAIL);
-            }
-            service();
-
-            // Current value, in hex, so the ramp position is readable as a number too.
-            srect(0, BAR_Y + BAR_H + 6, SCREEN_W, 10, COL_BG);
-            hex32(buf, v);
-            text(BAR_X, BAR_Y + BAR_H + 6, buf + 4, COL_HEX, 1);
-            if (failed) {
-                hex32(buf, failAt);
-                text(110, BAR_Y + BAR_H + 6, "BROKE AT", COL_DIM, 1);
-                text(178, BAR_Y + BAR_H + 6, buf + 4, COL_FAIL, 1);
+            // Result of the pass just finished.
+            rect(BAR_X - 2, BAR_Y - 2, BAR_W + 4, BAR_H + 4, COL_DIM);
+            rect(BAR_X, BAR_Y, BAR_W, BAR_H, COL_BG);
+            if (g_ltHave) {
+                int w = g_ltFailed ? (int)(((uint64_t)g_ltFailAt * BAR_W) / 0xFFFFu) : BAR_W;
+                if (w > 0) rect(BAR_X, BAR_Y, w, BAR_H, g_ltFailed ? COL_WAIT : COL_OK);
+                if (g_ltFailed) rect(BAR_X + w, BAR_Y - 4, 2, BAR_H + 8, COL_FAIL);
             }
 
-            // Repeatability tally. One clean pass proves nothing; a column of them does.
-            srect(0, 120, SCREEN_W, 30, COL_BG);
-            dec32(buf, g_ltPassOk, 4);
-            text(30, 122, "CLEAN", COL_DIM, 1); text(80, 122, buf, COL_OK, 1);
-            dec32(buf, g_ltPassBad, 4);
-            text(120, 122, "BAD", COL_DIM, 1);  text(150, 122, buf, COL_FAIL, 1);
+            if (g_ltHave && g_ltFailed) {
+                hex32(buf, g_ltFailAt);
+                text(BAR_X, BAR_Y + BAR_H + 6, "BROKE AT", COL_DIM, 1);
+                text(BAR_X + 70, BAR_Y + BAR_H + 6, buf + 4, COL_FAIL, 1);
+            } else if (g_ltHave) {
+                text(BAR_X, BAR_Y + BAR_H + 6, "FULL RAMP 0000-FFFF OK", COL_OK, 1);
+            }
+
+            // What kind of discontinuity, which is the question that distinguishes causes.
+            dec32(buf, g_ltSkips, 4);
+            text(14, 104, "DROPPED", COL_DIM, 1); text(76, 104, buf, g_ltSkips ? COL_WAIT : COL_OK, 1);
+            dec32(buf, g_ltWild, 4);
+            text(120, 104, "SLIP", COL_DIM, 1);   text(158, 104, buf, g_ltWild ? COL_FAIL : COL_OK, 1);
             dec32(buf, g_ltBadMagic, 5);
-            text(30, 132, "CORRUPT", COL_DIM, 1);
-            text(92, 132, buf, g_ltBadMagic ? COL_FAIL : COL_OK, 1);
+            text(14, 116, "CORRUPT", COL_DIM, 1); text(76, 116, buf, g_ltBadMagic ? COL_FAIL : COL_OK, 1);
 
-            if (g_ltPassOk && !g_ltPassBad)      text_centre(146, "RELIABLE", COL_OK,   1);
-            else if (g_ltPassBad)                text_centre(146, "DROPPING WORDS", COL_FAIL, 1);
-            else                                 text_centre(146, "MEASURING", COL_DIM, 1);
+            dec32(buf, g_ltPassOk, 3);
+            text(14, 130, "CLEAN PASSES", COL_DIM, 1); text(110, 130, buf, COL_OK, 1);
+            dec32(buf, g_ltPassBad, 3);
+            text(140, 130, "BAD", COL_DIM, 1);         text(172, 130, buf, COL_FAIL, 1);
 
-            for (int i = 0; i < 300; i++) service();
+            if (g_ltPassOk && !g_ltPassBad)  text_centre(144, "RELIABLE AT THIS RATE", COL_OK, 1);
+            else if (g_ltPassBad)            text_centre(144, "NOT RELIABLE", COL_FAIL, 1);
+            else                             text_centre(144, "MEASURING...", COL_DIM, 1);
+
+            // ---- now freeze and measure one full ramp ----
+            g_ltFailed = 0; g_ltFailAt = 0; g_ltHave = 0;
+            g_ltSkips = 0; g_ltWild = 0; g_ltBadMagic = 0;
+            g_ltPassDone = 0;
+            g_ltMeasuring = 1;
+
+            // Nothing is drawn until the ramp wraps. At 100 kHz a full pass is ~21 s; at
+            // 200 kHz ~10 s. The screen holding still IS the measurement running.
+            uint32_t guard = 0;
+            while (!g_ltPassDone && ++guard < 40000000u) service();
+
+            g_ltMeasuring = 0;
+            if (g_ltHave) { if (g_ltFailed) g_ltPassBad++; else g_ltPassOk++; }
             continue;
         }
 
