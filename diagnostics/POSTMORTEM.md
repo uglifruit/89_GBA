@@ -156,6 +156,36 @@ Worth recording, because it was the part most feared:
   "can a slow transistor gate input clock this?" — turned out fine. It inverts, which we
   missed, but its bandwidth was never the issue.
 
+## Measured link numbers (2026-09-07)
+
+| Quantity | Value | How it was established |
+|---|---|---|
+| **Reliable multiboot rate** | **100 kHz** | `mbrate.uf2`, one speed at a time, repeated power-cycles |
+| 200 kHz | **marginal** | Sometimes completed; often failed partway, leaving the console restarting its boot repeatedly |
+| 300 / 500 kHz | fail | — |
+
+**An earlier claim of "multiboot runs at 200 kHz" was wrong.** It came from an automatic
+ladder that tried rates fastest-first and kept the first that worked. But a multiboot attempt
+only succeeds once the console is already in its BIOS wait state, so that ladder reported
+whichever rung it happened to be on at the moment the GBA became ready — timing luck, not a
+property of the link. Andy spotted it from the outside: *"the speed at the multiboot transfer
+is randomly different depending on when I start the GBA."*
+
+The fix was a better instrument, not more analysis: `mbrate.uf2` tests **one** speed at a
+time, chosen by hand, with repeated power-cycles. A single success is not reliability.
+
+**Upload time at 100 kHz** — this is what governs how large a payload can be:
+
+| Payload | Time |
+|---|---|
+| 6 KB (current) | ~1 s |
+| 32 KB (menu of apps) | ~5 s |
+| 64 KB | ~10 s |
+
+Roughly half of that is `mb_delay()`, the 300 µs inter-word settle in `gba_multiboot.cpp`.
+GBATEK only requires 36 µs, so there is close to a 2× saving available if payload size ever
+makes it worth disturbing a working path. It is not worth it today.
+
 ## The tools, in the order they earned their keep
 
 | Tool | What it settled |
@@ -164,6 +194,7 @@ Worth recording, because it was the part most feared:
 | `cablecheck.uf2` | **Which wire carries the GBA's SO** — the crossover, by measurement |
 | `linkcheck.uf2` | Sampling variants, and the **word readout** that exposed the inversion |
 | `handshake.uf2` | Disproved the `0x0000` theory in one run |
+| `mbrate.uf2` | The reliable multiboot rate — by testing one speed at a time, by hand |
 
 `cablecheck` exists only because **Pulse In 2 (GPIO 3) was unused** by the project. Having a
 spare input to listen on turned an unresolvable argument into a two-minute measurement. Worth

@@ -42,12 +42,18 @@ static inline uint32_t pack_params()
 
 // SPI clock rates. Multiboot is deliberately slow to stay well within the Pulse In 1
 // transistor input's bandwidth; the polling loop can try a little faster but stays modest.
-// Multiboot rate LADDER, fastest first. The link was first proven on hardware at ~1 kHz
-// (2026-09-06), and 100 kHz has never been shown to work through the slow Pulse In 1
-// transistor stage — so do not hardcode a rate and hope. Each entry is tried in turn until
-// multiboot succeeds; the winning rate is then reused first next time, so a reconnect is
-// quick once the working speed is known.
-static constexpr uint32_t kMultibootLadder[] = { 100'000, 50'000, 16'000, 5'000, 1'000 };
+// Multiboot rate LADDER, fastest first.
+//
+// 100 kHz is the measured, repeatable ceiling (mbrate.uf2, 2026-09-07): it succeeded on every
+// power-cycle. 200 kHz was MARGINAL — it sometimes completed and often failed partway, leaving
+// the console restarting its boot over and over, which is a far worse experience than simply
+// running slower. So the ladder deliberately starts at 100 kHz and never attempts above it.
+//
+// This supersedes an earlier note claiming multiboot ran at 200 kHz. That figure came from an
+// automatic ladder that kept the first rate to succeed, which meant it reported whichever rung
+// it happened to be on when the console finished booting — timing luck, not a measurement.
+// Manual per-speed testing with repeats is what settled it.
+static constexpr uint32_t kMultibootLadder[] = { 100'000, 50'000, 25'000, 10'000, 5'000 };
 static constexpr int kLadderLen = (int)(sizeof(kMultibootLadder) / sizeof(kMultibootLadder[0]));
 
 // The post-boot poll runs at the rate that actually worked for multiboot, never faster: the
