@@ -11,11 +11,21 @@ logo screen.
 
 ### 1. It boots
 
-**Expect:** after ~2.5 s the GBA shows *"MTM - Workshop Computer Link"* and *"GBA PSG VOICE"*,
-then switches to the play screen. Workshop **LED 0 goes solid**.
+**Expect:** after ~2.5 s a brief **green flash**, then *"MTM - Workshop Computer Link"* and
+*"GBA PSG VOICE"*, then the play screen. Workshop **LED 0 goes solid**.
 
-*If the screen stays blank:* the image never ran — a wiring or multiboot fault, not a synth
-fault. Fall back to `diagnostics/mbrate.uf2` (LED 3 = 100 kHz is the proven rung).
+**The green flash is a deliberate boot proof**, painted in assembly before the C runtime
+exists. It makes three previously identical white screens tell themselves apart:
+
+| Screen | Meaning |
+|---|---|
+| stays **WHITE** | the image never ran — multiboot, entry point or header |
+| stays **GREEN** | the image ran; `.bss` zeroing or `main()` died |
+| title appears | normal boot |
+
+*If it stays WHITE:* flash `diagnostics/mbrate.uf2` and leave it on LED 3 (100 kHz). Power-cycle
+the GBA a few times. Solid = the upload itself is fine and the fault is in the image; blinking
+= multiboot is failing and nothing in the payload is implicated.
 
 *If the title appears but the play screen never does:* the host is not talking. LED 0 will be
 blinking. The splash holds for about 3 s and then gives up, so this is visible.
