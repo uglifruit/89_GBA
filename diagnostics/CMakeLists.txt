@@ -128,3 +128,17 @@ pico_add_extra_outputs(bandwidth)
 target_compile_definitions(bandwidth PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
 pico_enable_stdio_usb(bandwidth 0)
 target_compile_options(bandwidth PRIVATE -Wall -Wextra)
+
+# Manual multiboot speed test: one speed at a time, chosen by hand.
+add_executable(mbrate
+    mbrate.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/../gba_multiboot.cpp)
+pico_generate_pio_header(mbrate ${CMAKE_CURRENT_LIST_DIR}/../gba_spi.pio)
+target_include_directories(mbrate PUBLIC ${CMAKE_CURRENT_LIST_DIR}/..)
+target_link_libraries(mbrate
+    pico_unique_id pico_stdlib hardware_dma hardware_i2c hardware_pwm
+    hardware_adc hardware_spi hardware_pio pico_multicore)
+pico_add_extra_outputs(mbrate)
+target_compile_definitions(mbrate PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)
+pico_enable_stdio_usb(mbrate 0)
+target_compile_options(mbrate PRIVATE -Wall -Wextra)
