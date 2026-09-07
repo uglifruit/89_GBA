@@ -179,8 +179,13 @@ static volatile int g_benchDirty = 1;   // screen needs repainting for the curre
 // had to be decoded from blinking LEDs in this project has cost a bench cycle.
 //   0xA5______  low 24 bits = sequence counter, incrementing by 1
 //   0xA6____xx  low 16 bits = the current SCK rate in kHz, for display
-#define LT_SEQ_MAGIC  0xA5u
-#define LT_RATE_MAGIC 0xA6u
+// 16-BIT magics, not 8. The originals were 0xA5 and 0xA6 — two bits apart — and the GBA can
+// latch a BIT-SHIFTED word when it re-arms in the middle of a transfer. So an ordinary ramp
+// value could arrive looking like a rate message, and the displayed SCK jumped around between
+// 100 and 40000. Sixteen matching bits makes that effectively impossible, and anything
+// matching neither magic is now counted as corruption instead of being acted on.
+#define LT_SEQ_MAGIC  0xA5A5u
+#define LT_RATE_MAGIC 0xA6A6u
 // The host ramps a 16-bit counter 0 -> 0xFFFF over and over. The GBA plots how far each pass
 // gets: a clean pass fills the bar, a broken one stops where it broke. Whether a full sweep
 // completes, repeatably, at a given rate is the actual question — and this answers it at a
@@ -192,6 +197,7 @@ static volatile uint32_t g_ltFailAt = 0;   // where this pass broke
 static volatile int      g_ltFailed = 0;   // this pass has broken
 static volatile uint32_t g_ltPassOk = 0;   // passes that reached 0xFFFF cleanly
 static volatile uint32_t g_ltPassBad= 0;   // passes that broke
+static volatile uint32_t g_ltBadMagic = 0;   // words matching neither magic
 static uint16_t g_ltPrev = 0;
 static int      g_ltHave = 0;
 
@@ -230,7 +236,7 @@ static void service(void)
         // Link speed test: a gap in the sequence is a dropped or corrupted word, which is
         // exactly the reliability figure the rate sweep needs.
         {
-            uint32_t mag = got >> 24;
+            uint32_t mag = got >> 16;
             if (mag == LT_SEQ_MAGIC) {
                 g_linkTest = 1;
                 uint16_t v = (uint16_t)(got & 0xFFFFu);
@@ -247,10 +253,16 @@ static void service(void)
                 // rate shown beside it and never a blend of two.
                 if ((got & 0xFFFFu) != g_ltRate) {
                     g_ltRate = got & 0xFFFFu;
-                    g_ltPassOk = g_ltPassBad = 0;
+                    g_ltPassOk = g_ltPassBad = 0; g_ltBadMagic = 0;
                     g_ltFailed = 0; g_ltFailAt = 0; g_ltHave = 0; g_ltVal = 0;
                     g_benchDirty = 1;
                 }
+            } else if (g_linkTest) {
+                // Neither magic: the word is corrupt (most likely bit-shifted by the slave
+                // re-arming mid-transfer). Count it directly rather than waiting for it to
+                // show up as a sequence gap.
+                g_ltBadMagic++;
+                if (!g_ltFailed) { g_ltFailed = 1; g_ltFailAt = g_ltPrev; }
             }
         }
 
@@ -334,11 +346,14 @@ int main(void)
             dec32(buf, g_ltPassOk, 4);
             text(30, 122, "CLEAN", COL_DIM, 1); text(80, 122, buf, COL_OK, 1);
             dec32(buf, g_ltPassBad, 4);
-            text(130, 122, "BAD", COL_DIM, 1);  text(168, 122, buf, COL_FAIL, 1);
+            text(120, 122, "BAD", COL_DIM, 1);  text(150, 122, buf, COL_FAIL, 1);
+            dec32(buf, g_ltBadMagic, 5);
+            text(30, 132, "CORRUPT", COL_DIM, 1);
+            text(92, 132, buf, g_ltBadMagic ? COL_FAIL : COL_OK, 1);
 
-            if (g_ltPassOk && !g_ltPassBad)      text_centre(134, "RELIABLE", COL_OK,   1);
-            else if (g_ltPassBad)                text_centre(134, "DROPPING WORDS", COL_FAIL, 1);
-            else                                 text_centre(134, "MEASURING", COL_DIM, 1);
+            if (g_ltPassOk && !g_ltPassBad)      text_centre(146, "RELIABLE", COL_OK,   1);
+            else if (g_ltPassBad)                text_centre(146, "DROPPING WORDS", COL_FAIL, 1);
+            else                                 text_centre(146, "MEASURING", COL_DIM, 1);
 
             for (int i = 0; i < 300; i++) service();
             continue;

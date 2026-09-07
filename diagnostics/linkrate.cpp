@@ -37,8 +37,11 @@
 //     DOWN click = next rate up      UP click = previous rate down
 //
 // PROTOCOL
-//     Host -> GBA   0xA5 <value:16>    the ramp, +1 per word; a gap is a dropped word
-//                   0xA6 <rateKHz:16>  current rate, so the GBA can display and reset on it
+//     Host -> GBA   0xA5A5 <value:16>   the ramp, +1 per word; a gap is a dropped word
+//                   0xA6A6 <rateKHz:16> current rate, so the GBA can display and reset on it
+//     The magics are 16 bits wide on purpose. With 8-bit magics (0xA5 / 0xA6, two bits apart)
+//     a bit-shifted ramp word could pass as a rate message, and the displayed SCK jumped
+//     between 100 and 40000. Words matching neither magic are now counted as corruption.
 //     GBA  -> host  0x600D <value:16>  where the GBA thinks the ramp has got to
 
 #include "ComputerCard.h"
@@ -89,14 +92,14 @@ static void core1_entry()
                 // when the rate changes, and until it hears about it the figures on screen
                 // would describe a blend of two rates.
                 for (int i = 0; i < 8; i++) {
-                    gba_spi_xfer32(0xA6000000u | (kRates[s] / 1000u));
+                    gba_spi_xfer32(0xA6A60000u | (kRates[s] / 1000u));
                     sleep_us(300);
                 }
             }
 
             // Ramp a 16-bit counter 0 -> 0xFFFF, over and over. The GBA plots how far each
             // pass gets, so a full clean sweep is visible as a full bar.
-            uint32_t r = gba_spi_xfer32(0xA5000000u | (seq & 0xFFFFu));
+            uint32_t r = gba_spi_xfer32(0xA5A50000u | (seq & 0xFFFFu));
             seq++;
             gS.sent = seq;
 
@@ -119,7 +122,7 @@ static void core1_entry()
             // the display permanently wrong.
             if (++sinceRate > 2000) {
                 sinceRate = 0;
-                gba_spi_xfer32(0xA6000000u | (kRates[s] / 1000u));
+                gba_spi_xfer32(0xA6A60000u | (kRates[s] / 1000u));
             }
         }
     }
