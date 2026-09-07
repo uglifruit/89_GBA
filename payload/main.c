@@ -207,6 +207,14 @@ static volatile uint32_t g_ltBadMagic = 0;   // words matching neither magic
 // tightly for a whole 0->FFFF ramp without drawing at all, then draw the outcome.
 static volatile int      g_ltMeasuring = 0;
 static volatile int      g_ltPassDone  = 0;
+// A pass must begin at a KNOWN point in the ramp, not wherever the counter happened to be
+// when the measuring window opened. Andy measured a rock-steady "2 dropped, 4 corrupt" on
+// every pass from 100 to 2000 words/s — identical across a 20x rate range, which cannot be a
+// rate-dependent link error. It is the boundary: the payload comes out of a long deaf redraw
+// part-way through a word, latches a partial one or two, and re-syncs. Those artefacts belong
+// to the instrument, not the link, so the window now DISCARDS everything until the ramp wraps
+// and only then starts judging. Every pass is then a true 000->FFF sweep.
+static volatile int      g_ltArmed     = 0;
 static volatile uint32_t g_ltSkips     = 0;   // small gaps: dropped words
 static volatile uint32_t g_ltWild      = 0;   // large jumps: bit-slip / corruption
 static uint16_t g_ltPrev = 0;
@@ -253,10 +261,17 @@ static void service(void)
                 uint16_t v = (uint16_t)(got & 0x0FFFu);   // 12-bit ramp: 4096 words
                 if (!g_ltMeasuring) {
                     g_ltPrev = v; g_ltHave = 0;     // drawing: track position, judge nothing
-                } else if (!g_ltHave) {
+                } else if (!g_ltArmed) {
+                    // Warm-up: follow the ramp without judging until it wraps, so the pass
+                    // starts at a known point and boundary artefacts are excluded entirely.
+                    if (g_ltHave && v < g_ltPrev) {
+                        g_ltArmed = 1;
+                        g_ltSkips = 0; g_ltWild = 0; g_ltBadMagic = 0;
+                        g_ltFailed = 0; g_ltFailAt = 0;
+                    }
                     g_ltPrev = v; g_ltHave = 1; g_ltVal = v;
                 } else {
-                    uint16_t expect = (uint16_t)(g_ltPrev + 1);
+                    uint16_t expect = (uint16_t)((g_ltPrev + 1) & 0x0FFFu);
                     if (v < g_ltPrev) {
                         // Value went backwards = the ramp wrapped. Detecting the wrap this way
                         // rather than by waiting for exactly 0 matters: if that one word is
@@ -281,7 +296,7 @@ static void service(void)
                     g_ltFailed = 0; g_ltFailAt = 0; g_ltHave = 0; g_ltVal = 0;
                     g_benchDirty = 1;
                 }
-            } else if (g_linkTest && g_ltMeasuring) {
+            } else if (g_linkTest && g_ltMeasuring && g_ltArmed) {
                 // Neither magic: corrupt, most likely bit-shifted by the slave re-arming mid
                 // transfer. Only counted while MEASURING — outside the window we are drawing,
                 // and words missed then are our own doing rather than the link's.
@@ -376,6 +391,7 @@ int main(void)
             g_ltFailed = 0; g_ltFailAt = 0; g_ltHave = 0;
             g_ltSkips = 0; g_ltWild = 0; g_ltBadMagic = 0;
             g_ltPassDone = 0;
+            g_ltArmed = 0;              // discard everything until the ramp wraps
             g_ltMeasuring = 1;
 
             // Nothing is drawn until the ramp wraps. At 100 kHz a full pass is ~21 s; at
@@ -384,7 +400,7 @@ int main(void)
             while (!g_ltPassDone && ++guard < 40000000u) service();
 
             g_ltMeasuring = 0;
-            if (g_ltHave) { if (g_ltFailed) g_ltPassBad++; else g_ltPassOk++; }
+            if (g_ltArmed) { if (g_ltFailed) g_ltPassBad++; else g_ltPassOk++; }
             continue;
         }
 
