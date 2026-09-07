@@ -1,9 +1,9 @@
 draft: false
-Name: GBA Link
-Description: Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then uses it as a controller/screen for the module
+Name: GBA PSG Voice
+Description: Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then plays it as a chiptune synth voice with the sound editor on the GBA's own screen
 Language: C++ (RP2040 Pico SDK) + C (GBA payload)
 Creator: Andy Jenkinson (uglifruit)
-Version: 0.1.0
+Version: 0.2.0
 Status: Work in progress
 License: MIT
 Repository: https://github.com/TomWhitwell/Workshop_Computer/tree/main/releases/89_GBA
@@ -12,78 +12,99 @@ tags:
   - gba
   - link cable
   - multiboot
-  - controller
+  - chiptune
+  - psg
+  - synth voice
   - screen
   - experimental
 
 manual: |
-  GBA Link turns the Workshop Computer into a Game Boy Advance link-cable master. Wire a
-  bare GBA link socket to the pulse jacks (common ground):
+  GBA PSG Voice turns the Workshop Computer into a Game Boy Advance link-cable master and
+  the GBA into a synth voice you play from the rack. Wire a bare GBA link socket to the
+  pulse jacks (common ground), with 1k series resistors on the two lines the module drives:
 
-    Pulse Out 1 -> GBA SC   (serial clock)
-    Pulse Out 2 -> GBA SI   (serial in / MOSI)
-    Pulse In 1  -> GBA SO   (serial out / MISO)
+    Pulse Out 1 -> GBA SC   (serial clock)   1k
+    Pulse Out 2 -> GBA SI   (serial in)      1k
+    Pulse In 1  -> GBA SO   (serial out)     no resistor
 
-  Power on a GBA with no cartridge (or pick the multiboot/"download" option). The module
-  uploads a small program into the GBA over the link (BIOS Multiboot), then keeps a live
-  connection: the GBA becomes a controller + screen for the synth.
+  Many GBA link cables cross SO/SI between their ends. Do not guess: flash
+  diagnostics/cablecheck.uf2 and run MODE 0, which reports which wire actually carries SO.
 
-  v0 smoke test: once booted, the GBA screen shows four bars and a tint driven by the
-  module's three knobs + CV In 1, and highlights the buttons you press. On the module,
-  D-pad Up/Down ramps CV Out 1, A/B set CV Out 2 high/low, and the L/R shoulder buttons
-  gate Audio Out 1/2. LED 0 lights when the link has booted; LED 1 while connecting.
+  Power the Computer first, then the GBA - the console only syncs if the master is already
+  clocking when it boots. Cartridge-less, on the logo screen. The module uploads the
+  instrument over the link in about two and a half seconds.
 
-  This is an early, experimental applet — the payload is a minimal stub intended to grow
-  into a real on-screen UI.
+  The GBA makes the sound on its own PSG hardware and puts it out of its HEADPHONE JACK,
+  which goes to the rack. It is around 1 Vpp against Eurorack's 10 Vpp, so it will be quiet.
+  The original GBA and the Game Boy Micro have a headphone socket; the GBA SP does not and
+  needs the official SP adapter.
+
+  Defaults: CV In 2 is 1V/oct pitch, Pulse In 2 is the gate, CV In 1 sweeps pulse duty,
+  Audio In 1 detunes the second square, Audio In 2 brings in the noise channel. All four CV
+  inputs are re-assignable on the GBA's MAP page.
+
+  On the GBA, PLAY mode gives you D-pad up/down for octave, left/right for detune, the
+  shoulder buttons for the two square duties, A to trigger by hand and B to latch. START
+  opens the editor; SELECT cycles its five pages (VOICE, ENVELOPE, SWEEP, MAP, CAL).
+
+  The CAL page trims the CV input scale and offset. The module's CV OUTPUTS are factory
+  calibrated from its EEPROM, so the quantised pitch out is in tune for free, but the CV
+  INPUTS are not calibrated at all - so 1V/oct tracking on CV In 2 has to be trimmed once,
+  with the live note readout on that page to trim against.
+
+  The patch lives in GBA RAM and is lost when the console powers off.
 
 panel:
   inputs:
+    - id: CVIn2
+      name: Pitch
+      description: 1V/oct pitch CV. Trim tracking on the GBA CAL page (CV inputs are not factory calibrated)
+    - id: Pulse2
+      name: Gate
+      description: Gate and trigger. Edges shorter than the 1ms poll are still caught
+    - id: CVIn1
+      name: Timbre
+      description: Pulse duty of the square channels by default; re-assignable on the MAP page
+    - id: Audio1
+      name: Detune
+      description: Channel-2 detune by default; re-assignable on the MAP page
+    - id: Audio2
+      name: Noise
+      description: Noise channel level by default; re-assignable on the MAP page
     - id: PulseIn1
       name: GBA SO (MISO)
-      description: Serial data back from the GBA. Sampled directly (not via the 48kHz pulse path).
-    - id: Main
-      name: Param 1
-      description: Streamed to the GBA as a bar / background tint
-    - id: X
-      name: Param 2
-      description: Streamed to the GBA as a bar
-    - id: Y
-      name: Param 3
-      description: Streamed to the GBA as a bar
-    - id: CVIn1
-      name: Param 4
-      description: Streamed to the GBA as a bar
+      description: Serial data back from the GBA. Read directly via PIO, not the 48kHz pulse path
   outputs:
     - id: PulseOut1
       name: GBA SC (clock)
       description: Master serial clock driven by the RP2040 (PIO), inversion handled in hardware
     - id: PulseOut2
       name: GBA SI (MOSI)
-      description: Serial data to the GBA (payload + live parameters)
-    - id: CVOut1
-      name: D-pad CV
-      description: Ramps up/down while GBA Up/Down held
+      description: Serial data to the GBA (payload upload, then the live input stream)
     - id: CVOut2
-      name: A/B level
-      description: +high on A, -low on B, else 0
+      name: Quantised pitch
+      description: The note the GBA is sounding, as calibrated 1V/oct. Turns the pair into a quantiser for the rest of the rack
+    - id: CVOut1
+      name: Gate out
+      description: 5V while a note is sounding
     - id: AudioOut1
-      name: L gate
-      description: High while GBA L held
+      name: Note trigger
+      description: High while the GBA envelope is active
     - id: AudioOut2
-      name: R gate
-      description: High while GBA R held
+      name: Gate mirror
+      description: Follows Pulse In 2
 
 controls:
   leds:
     - id: LED0
-      name: Link booted
+      name: Link (solid booted, blinking connecting)
     - id: LED1
-      name: Connecting / error
+      name: Gate in
     - id: LED2
-      name: Button A
+      name: Note sounding
     - id: LED3
-      name: Button B
+      name: Editing on the GBA
     - id: LED4
-      name: Button L
+      name: Edit page, bit 0
     - id: LED5
-      name: Button R
+      name: Edit page, bit 1

@@ -1,13 +1,20 @@
-# 89_GBA — GBA Link
+# 89_GBA — GBA PSG Voice
 
-Turns the Music Thing Workshop Computer into a **Game Boy Advance link-cable master**:
-it boots a cartridge-less GBA over the pulse jacks using BIOS **Multiboot**, then keeps a
-live SPI connection so the GBA can act as a controller + screen for the module.
+Turns the Music Thing Workshop Computer into a **Game Boy Advance link-cable master**, and
+the GBA into a **chiptune synth voice played by the modular**. The module boots a
+cartridge-less GBA over the pulse jacks using BIOS **Multiboot**, then streams its inputs
+down a live SPI link. The GBA makes the sound on its own PSG hardware, out of its own
+headphone jack, and carries the whole sound editor on its own screen.
 
-> **Status: WORKING on hardware (2026-09-06).** A cartridge-less GBA boots from the module,
-> runs the uploaded payload, shows *"MTM - Workshop Computer Link"*, and reports its buttons
-> back - A/B/L/R light LEDs 2-5. The payload is still a minimal bidirectional demo intended
-> to grow into a real UI.
+**The division of labour is the design.** The Workshop senses; the GBA is the instrument.
+This side reads five inputs and sends them raw; the GBA owns pitch tracking, the modulation
+matrix, the envelope and the UI. That is what makes the on-screen editor free — re-mapping
+an input is a change to a table in GBA RAM, not a protocol change and not a firmware rebuild.
+
+> **Status: link WORKING on hardware (2026-09-06), PSG voice awaiting bench test.** A
+> cartridge-less GBA boots from the module, runs the uploaded payload and talks both ways.
+> **Testing the voice for the first time? Work down [`BENCH.md`](BENCH.md)** — each step
+> isolates one thing, so a failure tells you where rather than just that.
 >
 > Bring-up was not straightforward. **Read
 > [`diagnostics/POSTMORTEM.md`](diagnostics/POSTMORTEM.md)** before touching the transport:
@@ -64,20 +71,50 @@ clocking when it boots. Power-cycle the *GBA* to retry. Cartridge-less, on the l
   1k), trying each until the upload succeeds, since the working rate is a property of the
   cable and console rather than a constant.
 
-## v0 behaviour
+## Playing it
 
-**On the GBA screen:** four bars + a background tint driven by the module's three knobs +
-CV In 1, with the buttons you press highlighted along the top.
+Patch the GBA's **headphone jack** into the rack. It is around 1 Vpp against Eurorack's
+~10 Vpp, so expect it to be quiet — a mixer or the next module's input gain will sort it.
+The original GBA (AGB-001) and the Game Boy Micro have a headphone socket; the **GBA SP has
+none** and needs the official SP adapter.
 
-**On the module:**
+### Module panel
 
-| GBA input | Module output |
-|-----------|---------------|
-| D-pad Up/Down | ramps CV Out 1 up/down |
-| A / B | CV Out 2 = +high / −low |
-| L / R | Audio Out 1 / 2 gate high |
+| Jack | Default role | Re-assignable? |
+|------|--------------|----------------|
+| **CV In 2** | 1V/oct pitch | yes, MAP page |
+| **Pulse In 2** | gate / trigger | fixed |
+| **CV In 1** | pulse duty (timbre) | yes, MAP page |
+| **Audio In 1** | channel-2 detune | yes, MAP page |
+| **Audio In 2** | noise level | yes, MAP page |
+| **CV Out 2** | quantised pitch, calibrated 1V/oct | — |
+| **CV Out 1** | gate mirror, 5 V | — |
+| **Audio Out 1 / 2** | note / gate triggers | — |
 
-LEDs: **LED 0** = link booted, **LED 1** = connecting/error, **LED 2–5** = A / B / L / R.
+LEDs: **0** link (solid booted, blinking connecting), **1** gate in, **2** note sounding,
+**3** editing, **4+5** edit page as a binary pair.
+
+### GBA controls
+
+**PLAY** — D-pad up/down octave, left/right detune, **L**/**R** cycle the two square duties,
+**A** manual trigger, **B** hold/latch, **START** opens the editor.
+
+**EDIT** — **SELECT** cycles the five pages, D-pad moves and changes, **L**/**R** change in
+steps of 8, **START** returns to play.
+
+| Page | What it holds |
+|------|---------------|
+| VOICE | per-channel on/off, duties, detune, wavetable, noise pitch and type |
+| ENVELOPE | attack, decay, sustain, release, retrigger, noise level |
+| SWEEP | channel-1 hardware sweep, glide, octave |
+| MAP | the modulation matrix: each input's destination and bipolar depth |
+| CAL | **CV input scale and offset trim**, base note, master volume, PSG level |
+
+**The CAL page is not filler.** ComputerCard calibrates the CV *outputs* from the module's
+EEPROM, so the quantised pitch out is in tune for free — but there is **no calibration for
+the CV inputs**, so 1V/oct tracking on CV In 2 depends on a scale constant that has to be
+trimmed. Doing that on a screen with a live note readout beside it, rather than by
+recompiling, is exactly what having a display is for.
 
 ## Building
 
@@ -122,19 +159,28 @@ real `gbafix`/devkitARM it uses those instead. See [`payload/README.md`](payload
       **not** to be the problem at all; see [`diagnostics/POSTMORTEM.md`](diagnostics/POSTMORTEM.md).
 - [x] **Link characterised**: multiboot 100 kHz, 2000 words/s sustained (~64 kbit/s),
       round trip ≤0.5 ms, 32 KB payload uploads in ~5 s
-- [ ] Protocol v1: typed opcodes shared by both sides
-- [ ] On-screen menu + app framework
-- [ ] Apps: chiptune voice, performance pads, sequencer, scope
+- [x] **Protocol v1** (`gba_proto.h`), shared verbatim by firmware and payload
+- [x] **PSG voice**: all four channels, software ADSR, 4-source modulation matrix
+- [x] **On-screen editor**: five pages including CV input calibration
+- [x] **Serial-IRQ link servicing**, with the proven polled path kept as a live fallback
+- [ ] Patch persistence (the patch resets when the GBA powers off; upload is ~2.5 s)
+- [ ] Further apps: performance pads, sequencer, scope
 
 ## Files
 
 | File | Role |
 |------|------|
-| `main.cpp` | ComputerCard subclass (core 0) + core-1 launch + v0 mapping |
+| `main.cpp` | ComputerCard subclass (core 0): reads the inputs, drives CV/gate out |
+| `gba_proto.h` | **The wire protocol, shared verbatim by both sides** |
 | `gba_spi.pio` / `gba_spi.h` | PIO SPI master transport (GPIO 8/9/2) |
 | `gba_multiboot.h` / `.cpp` | Multiboot uploader + SPI init |
 | `gba_link.h` / `.cpp` | Core-1 link engine + `GbaShared` cross-core state |
 | `gba_payload.h` | Baked GBA `.mb` image (placeholder until `payload/build.sh` is run) |
+| `payload/link.c` | GBA serial slave + serial IRQ handler |
+| `payload/psg.c` | PSG register layer, wavetables, note period table |
+| `payload/synth.c` | Voice model: pitch, modulation matrix, envelope |
+| `payload/ui.c` | Play screen + five-page editor |
+| `payload/diag.c` | Link-characterisation screens (linkrate / bandwidth) |
 | `payload/` | GBA-side program + build pipeline |
 | `ComputerCard.h` | Vendored HAL (from the Workshop library) |
 

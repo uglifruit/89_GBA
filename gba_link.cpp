@@ -1,47 +1,32 @@
-// gba_link.cpp — Core-1 GBA link engine: multiboot then the post-boot polling loop.
+// gba_link.cpp — Core-1 GBA link engine: multiboot, then the post-boot streaming loop.
 
 #include "gba_link.h"
 #include "gba_spi.h"
 #include "gba_multiboot.h"
+#include "gba_proto.h"
 
 #include "pico/stdlib.h"
 
 GbaShared gGba;
 
 // ---------------------------------------------------------------------------
-// Post-boot packet format (v0 bidirectional smoke test)
+// Post-boot loop
 //
-// One 32-bit exchange per poll, mode 3 SPI, RP2040 still the clock master.
-//   RP2040 -> GBA (MOSI word):  [31:24]=0xC0 tag  [23:16]=params[0] ... actually 4 bytes:
-//        we pack all four params into the 32-bit word: p0<<24 | p1<<16 | p2<<8 | p3.
-//   GBA   -> RP2040 (MISO word): [31:16]=0x600D framing tag  [15:0]=button bitfield.
+// One 32-bit exchange per poll, mode 3 SPI, RP2040 still the clock master. Downstream is
+// almost always a STREAM word carrying the gate plus one of the two input pairs; upstream is
+// whatever the GBA had queued, identified by its 16-bit tag. See gba_proto.h.
 //
-// The framing tag lets the host reject noise / half-synced words from the slow Pulse In 1
-// line and only accept a well-formed reply. If MANY polls in a row fail the tag check, we
-// assume the link dropped and fall back to re-running multiboot.
-//
-// The tolerance has to be generous. The GBA slave can only have one transfer pending at a
-// time, and it is briefly deaf between finishing one word and re-arming for the next — plus
-// whatever time it spends drawing. A short run of tag misses is NORMAL, not a dropped link.
-// The original threshold of 32 at a 1 kHz poll rate meant roughly 32 ms of silence tore the
-// link down and restarted multiboot, which is why it connected and immediately dropped.
+// The tag check is what lets the host reject noise and half-synced words from the slow Pulse
+// In 1 line. The tolerance for failures has to be generous: the GBA slave can only have one
+// transfer pending and is briefly deaf between finishing one word and re-arming, so a short
+// run of tag misses is NORMAL, not a dropped link. An early threshold of 32 at 1 kHz meant
+// 32 ms of silence tore the link down and restarted multiboot, which is why it used to connect
+// and immediately drop.
 // ---------------------------------------------------------------------------
-
-static constexpr uint16_t kReplyTag = 0x600D;   // "GOOD" — GBA payload stamps this in the high half
 
 // ~5 s of unbroken silence at the 1 kHz poll rate before declaring the link dead.
 static constexpr int kMaxConsecutiveBad = 5000;
 
-static inline uint32_t pack_params()
-{
-    return ((uint32_t)gGba.params[0] << 24) |
-           ((uint32_t)gGba.params[1] << 16) |
-           ((uint32_t)gGba.params[2] <<  8) |
-           ((uint32_t)gGba.params[3]);
-}
-
-// SPI clock rates. Multiboot is deliberately slow to stay well within the Pulse In 1
-// transistor input's bandwidth; the polling loop can try a little faster but stays modest.
 // Multiboot rate LADDER, fastest first.
 //
 // 100 kHz is the measured, repeatable ceiling (mbrate.uf2, 2026-09-07): it succeeded on every
@@ -56,8 +41,16 @@ static inline uint32_t pack_params()
 static constexpr uint32_t kMultibootLadder[] = { 100'000, 50'000, 25'000, 10'000, 5'000 };
 static constexpr int kLadderLen = (int)(sizeof(kMultibootLadder) / sizeof(kMultibootLadder[0]));
 
-// The post-boot poll runs at the rate that actually worked for multiboot, never faster: the
-// payload's serial slave is on the same wire with the same bandwidth limit.
+// THE GAP IS THE POINT, and it applies to EVERY word we send — control words included.
+//
+// The GBA slave holds ONE pending transfer and re-arms with a read-modify-write of SIOCNT, so
+// a word clocked before it has re-armed is not merely lost, it is CORRUPTED. Measured clean at
+// 2000 words/s over 25 passes (linkrate.uf2); 1 kHz sits at half that with 1 ms of latency.
+// At 100 kHz SCK a 32-bit word occupies 320 us, leaving ~680 us of slack.
+//
+// The rock-steady "dropped 2, corrupt 4" that survived a 20x rate range was one out-of-band
+// word sent without this gap, destroying the word behind it. Do not special-case anything.
+static inline void link_gap() { sleep_us(1000); }
 
 void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
 {
@@ -99,29 +92,81 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
         gba_spi_set_clock(kMultibootLadder[ladderIx]);   // poll at the proven rate, not faster
         sleep_ms(50);
 
-        // ---- polling loop ----
-        int consecutiveBad = 0;
-        for (;;) {
-            uint32_t reply = gba_spi_xfer32(pack_params());
+        // Introduce ourselves. Repeated because a single missed word would leave the GBA's CAL
+        // page reporting the wrong calibration state for ever, and each one takes its gap like
+        // any other word.
+        for (int i = 0; i < 4; i++) {
+            gba_spi_xfer32(gba_hello_pack(gGba.caps));
+            link_gap();
+        }
 
-            if ((reply >> 16) == kReplyTag) {
-                gGba.buttons = (uint16_t)(reply & 0xFFFF);
-                gGba.rxSeq++;
-                consecutiveBad = 0;
-            } else if (++consecutiveBad > kMaxConsecutiveBad) {
-                // Link looks genuinely dead — drop back to reconnect.
+        // ---- streaming loop ----
+        int      consecutiveBad = 0;
+        int      pair           = 0;    // alternates {CV1,CV2} and {AUD1,AUD2}
+        uint32_t reportedEdges  = gGba.gateEdges;
+        uint32_t seq            = 0;
+
+        for (;;) {
+            uint32_t word;
+
+            // Slow housekeeping, interleaved one word at a time so it never displaces more
+            // than a single input update: knobs and switch round-robin, then a HELLO refresh.
+            uint32_t slot = seq & 0x3Fu;
+            if (slot == 0x10u) {
+                word = gba_knob_pack(0, gGba.knobs[0]);
+            } else if (slot == 0x20u) {
+                word = gba_knob_pack(1, gGba.knobs[1]);
+            } else if (slot == 0x30u) {
+                word = gba_knob_pack(2, gGba.knobs[2]);
+            } else if (slot == 0x38u) {
+                word = gba_control_pack(GBA_OP_SWITCH, gGba.switchPos);
+            } else if ((seq & 0x7FFu) == 0x7FFu) {
+                word = gba_hello_pack(gGba.caps);
+            } else {
+                // The hot path. Report exactly one gate edge per increment: advancing by one
+                // rather than jumping to the current count means a burst of triggers arrives
+                // in order instead of being collapsed into one.
+                uint32_t edges = gGba.gateEdges;
+                int      edge  = (edges != reportedEdges);
+
+                word = gba_stream_pack(pair, gGba.gate, edge,
+                                       gGba.inputs[pair ? GBA_IN_AUD1 : GBA_IN_CV1],
+                                       gGba.inputs[pair ? GBA_IN_AUD2 : GBA_IN_CV2]);
+                if (edge) reportedEdges++;
+                pair ^= 1;
+            }
+            seq++;
+
+            uint32_t reply = gba_spi_xfer32(word);
+
+            switch (GBA_UP_TAG(reply)) {
+            case GBA_UP_BUTTONS:
+                gGba.buttons = (uint16_t)GBA_UP_DATA(reply);
                 break;
+            case GBA_UP_NOTE:
+                gGba.note    = (uint8_t)(GBA_UP_DATA(reply) >> 8);
+                gGba.noteVel = (uint8_t)(GBA_UP_DATA(reply) & 0xFF);
+                break;
+            case GBA_UP_STATUS:
+                gGba.page  = (uint8_t)((GBA_UP_DATA(reply) >> 12) & 0xF);
+                gGba.mode  = (uint8_t)((GBA_UP_DATA(reply) >>  8) & 0xF);
+                gGba.flags = (uint8_t)(GBA_UP_DATA(reply) & 0xFF);
+                break;
+            case GBA_UP_PARAM:
+                break;                          // reserved: patch echo, unused in v1
+            default:
+                gGba.rxBad++;
+                if (++consecutiveBad > kMaxConsecutiveBad) goto dropped;
+                link_gap();
+                continue;
             }
 
-            // 1 kHz poll. Measured clean at 2000 words/s over 25 passes (linkrate.uf2), so
-            // this sits at half the proven rate — comfortable margin, and 1 ms of latency
-            // instead of 5 ms.
-            //
-            // The gap is what matters, not the clock: the GBA slave holds ONE pending transfer
-            // and re-arms with a read-modify-write, so a poll that lands before it has re-armed
-            // is not merely wasted, it corrupts the word. At 100 kHz SCK a 32-bit word occupies
-            // 320 us, so this leaves ~680 us of slack. Do not remove the gap.
-            sleep_us(1000);
+            gGba.rxSeq++;
+            consecutiveBad = 0;
+            link_gap();
         }
+
+    dropped:
+        ;   // fall out to the reconnect loop
     }
 }

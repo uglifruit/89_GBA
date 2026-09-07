@@ -42,7 +42,12 @@ _headerstart:
     .global _start
 _start:
 _start_cart:
-    ldr sp, =0x03007F00             @ IWRAM (system) stack
+    @ IWRAM (system) stack. NOT the conventional 0x03007F00: the BIOS hands our serial IRQ
+    @ handler the IRQ stack at 0x03007FA0, and at 0x03007F00 that leaves it only 160 bytes
+    @ before it collides with this one. link_pump() calls two levels deeper than a typical
+    @ handler, so we move ours down and give the IRQ stack 416 bytes instead. Nothing else
+    @ uses IWRAM at all — the whole image is linked for EWRAM — so this costs nothing.
+    ldr sp, =0x03007E00
 
     @ Zero .bss. The section is NOLOAD, so it is NOT part of the multiboot image — whatever
     @ EWRAM happened to contain is still sitting there. C guarantees zero-initialised statics,

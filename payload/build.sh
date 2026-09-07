@@ -48,10 +48,26 @@ echo "compiler: $gcc_bin"
 echo "gbafix:   ${GBAFIX[*]}"
 
 # --- compile + link ---
+# Every .c in this directory, so adding a module never means editing this script. Note the
+# -I..: gba_proto.h lives at the repo root and is shared verbatim with the RP2040 firmware, so
+# the two sides of the wire cannot drift.
+#
+# -nostdlib means libgcc is NOT linked, so a divide by a variable would fail at link time with
+# an undefined __aeabi_uidiv rather than merely being slow. That is deliberate — it is a
+# tripwire, not an oversight. synth.c carries a shift-subtract udiv32 for the one place that
+# genuinely needs division.
 rm -rf build && mkdir build
+CFLAGS="-O2 -ffreestanding -fno-builtin -Wall -Wextra -I.."
+
 "$gcc_bin" $ARCH -x assembler-with-cpp -c crt0.s -o build/crt0.o
-"$gcc_bin" $ARCH -O2 -ffreestanding -fno-builtin -c main.c -o build/main.o
-"$gcc_bin" $ARCH -nostdlib -T multiboot.ld build/crt0.o build/main.o -o build/payload.elf
+OBJS="build/crt0.o"
+for src in *.c; do
+    obj="build/${src%.c}.o"
+    "$gcc_bin" $ARCH $CFLAGS -c "$src" -o "$obj"
+    OBJS="$OBJS $obj"
+done
+
+"$gcc_bin" $ARCH -nostdlib -T multiboot.ld $OBJS -o build/payload.elf
 
 # --- raw binary ---
 "$oc_bin" -O binary build/payload.elf build/payload.mb
@@ -62,3 +78,5 @@ rm -rf build && mkdir build
 # --- emit the C header (also pads to a 16-byte multiple) ---
 python ./bin2h.py build/payload.mb ../gba_payload.h gba_payload
 echo "wrote ../gba_payload.h"
+size=$(wc -c < build/payload.mb)
+echo "payload: $size bytes (~$((size * 5 / 32768)).$(( (size * 50 / 32768) % 10 ))s to upload at 100 kHz)"

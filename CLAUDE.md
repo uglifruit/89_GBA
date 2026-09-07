@@ -2,7 +2,8 @@
 
 GBA Multiboot link for the Music Thing Modular **Workshop Computer** (RP2040-based Eurorack
 module). Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot,
-then runs a live SPI link so the GBA acts as a controller/screen for the synth.
+then runs a live SPI link so the GBA is a **PSG synth voice played by the modular** — sound
+out of its headphone jack, sound editor on its own screen.
 
 Read this before editing. It records the non-obvious facts that make this applet work — most
 would take a full re-investigation to rediscover.
@@ -70,6 +71,17 @@ These are the ones that silently break things if ignored:
 7. **The HAL samples pulse inputs only at 48 kHz.** For the SPI link we read GPIO 2 via PIO,
    never `PulseIn1()`.
 
+## The division of labour (the decision everything else follows from)
+
+**The Workshop senses. The GBA is the instrument.** The Workshop reads its five inputs and
+streams them down raw; the GBA owns pitch tracking, the modulation matrix, the envelope, the
+sound and the whole UI. It sends back only what the rack needs: buttons, note, gate, status.
+
+This is why the on-screen editor costs no protocol. Re-mapping Audio In 1 from detune to
+vibrato is a change to a table in GBA RAM. Had the mapping lived on the Workshop side, every
+edit page would have needed its own downstream opcode. **Do not move musical decisions to the
+RP2040** — it is not where they belong and it makes the protocol grow without limit.
+
 ## Architecture (two cores)
 
 - **Core 0**: ComputerCard's 48 kHz loop (`main.cpp` `ProcessSample`). Runs inside
@@ -82,6 +94,61 @@ These are the ones that silently break things if ignored:
   publishes `buttons`; core 0 writes `params[]`. This mirrors 96_cathode's core-split.
 - Reference precedent for pulse-pin PIO + DMA on core 1 is **`releases/96_cathode`** in the
   monorepo (composite-video applet). It's the template for this pattern.
+
+## Protocol v1 (`gba_proto.h` — ONE header, both sides)
+
+C-compatible (payload is C, firmware is C++): plain `#define` and `static inline` only.
+
+- **Downstream** tag in bits [31:29]: `0b100` STREAM (gate + edge + one 12-bit input pair +
+  2 check bits), `0b000` CONTROL (`[28:24]` opcode, `[23:0]` arg), **`0b101` RESERVED**.
+- **`0b101` is fenced off deliberately.** The three diagnostic magics (`0xA5A5`, `0xA6A6`,
+  `0xBE7C`) all begin `101`. Giving STREAM `100` makes collision *structurally impossible*.
+  Under a weaker tag a live stream word would impersonate the ramp magic about every 30 s at
+  1 kHz and throw the instrument into link-test mode mid-performance.
+- **Upstream: the 16-bit tag IS the kind.** `0x600D` keeps its exact old meaning (buttons), so
+  every existing diagnostic still parses replies unchanged. `0x601E` status, `0x602A` note,
+  `0x6033` param. Low bytes form a distance-3 code, so one flipped bit cannot turn one kind
+  into another.
+- **Gate edges are a COUNTER, not a sticky flag, on both sides.** A flag set by one context and
+  cleared by another has two writers, and the losing interleaving is exactly the one that
+  matters — an edge arriving between the read and the clear vanishes. Each side keeps its own
+  tally and advances by one per edge, so a sub-millisecond trigger is never lost or merged.
+
+## GBA-side gotchas that cost silence, not errors
+
+1. **`SOUNDCNT_X` bit 7 (master enable) must be set BEFORE any other sound register write.**
+   With the master off the sound registers are not writable at all, and clearing bit 7 resets
+   them. `psg_init()` does this first.
+2. **Write the envelope volume BEFORE triggering a channel.** On this DMG-derived PSG, an
+   envelope register holding volume 0 with direction 0 switches the channel's DAC off, and
+   switching the DAC back on does **not** re-enable the channel — only a trigger does. A
+   released note leaves the envelope at 0, so triggering first would arm a channel whose DAC is
+   still off: first note sounds, every note after it is silent. `synth_tick()` writes all
+   volumes and only then triggers, at the very end.
+3. **An active note's volume is floored at 1, never 0.** Volume 0 turns the DAC off, so a slow
+   attack would be silent for ever — the trigger is skipped while volume is 0, and nothing
+   fires it again afterwards. Idle still reaches a true 0.
+4. **Envelopes are software**, updated at ~1 kHz off Timer 0. The hardware envelope runs once
+   per trigger and cannot sustain-then-release, which is the exact shape a gate input needs.
+   If the shape ever stops working on real hardware, suspect DMG "zombie mode" — some
+   revisions do not apply an `NRx2` write until the next trigger. The AGB PSG does.
+5. **No runtime division on the GBA.** The payload links `-nostdlib`, so libgcc is absent and
+   a divide by a *variable* is an undefined `__aeabi_uidiv`/`__aeabi_idivmod` at LINK time.
+   This is a deliberate tripwire, and it has already caught one `% rows` in the editor. Divides
+   by compile-time constants are fine (multiply-and-shift). `synth.c` carries a shift-subtract
+   `udiv32` for the one place that needs it.
+6. **Pitch comes from a baked table** (`payload/notes.h`, generated by `gen_notes.py`), and
+   sub-semitone pitch is linear interpolation *between period register values*. That is exact
+   rather than approximate: the register is an affine function of 1/f. The wave channel is one
+   octave down for the same register value, so channel 3 indexes the table 12 entries higher.
+7. **The user stack sits at `0x03007E00`, not the conventional `0x03007F00`.** The BIOS gives
+   the serial IRQ handler the IRQ stack at `0x03007FA0`; at `0x03007F00` that is only 160 bytes
+   before the two collide, and `link_pump()` nests deeper than a typical handler. Nothing else
+   uses IWRAM — the whole image is linked for EWRAM — so the move costs nothing.
+8. **The serial IRQ does NOT replace the polled path.** `link_service()` still runs the same
+   body with interrupts masked, so the two are mutually exclusive rather than racing. If the
+   IRQ never fires the payload degrades to exactly the polled behaviour that has always worked,
+   instead of going deaf and looking like a failed multiboot. The CAL page shows which is live.
 
 ## The multiboot protocol
 
@@ -102,8 +169,15 @@ These are the ones that silently break things if ignored:
 
 ## The GBA payload
 
-- `payload/` is a **self-contained GBA-side sub-project** (no libgba) built for ARM7TDMI
-  (armv4t). It's a serial-slave that mirrors the host packet format and draws a UI.
+- `payload/` is a **self-contained GBA-side sub-project** (no libgba, no libc) built for
+  ARM7TDMI (armv4t). Modules: `link` (serial slave + IRQ), `psg` (registers), `synth` (voice,
+  mod matrix, envelope), `ui` (play screen + five editor pages), `gfx`, `diag`, `main`.
+  `build.sh` compiles every `.c` in the directory, so adding a module needs no script edit.
+- **`diag.c` keeps the link-characterisation screens and must not be deleted.**
+  `linkrate.uf2` and `bandwidth.uf2` link this same generated payload image; they are the
+  instruments that produced every number in `POSTMORTEM.md` and how we would re-measure after
+  a regression. While a diagnostic mode is active EVERY word routes to its decoder, because
+  its corruption counter works by counting words matching neither magic.
 - **Multiboot entry is at offset `0xC0`** (not the header branch at 0x00). `crt0.s` must keep
   `_start` at exactly `0x020000C0`, image linked for EWRAM (`multiboot.ld`).
 - **The GBA BIOS validates the Nintendo logo (0x04..0x9F) and the header complement (0xBD)**
