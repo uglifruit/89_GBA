@@ -29,8 +29,8 @@ GbaShared gGba;
 
 static constexpr uint16_t kReplyTag = 0x600D;   // "GOOD" — GBA payload stamps this in the high half
 
-// ~5 s of unbroken silence at the 200 Hz poll rate before declaring the link dead.
-static constexpr int kMaxConsecutiveBad = 1000;
+// ~5 s of unbroken silence at the 1 kHz poll rate before declaring the link dead.
+static constexpr int kMaxConsecutiveBad = 5000;
 
 static inline uint32_t pack_params()
 {
@@ -113,10 +113,15 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
                 break;
             }
 
-            // ~200 Hz poll. Far more than a UI needs, and deliberately not faster: the GBA
-            // slave can only hold ONE pending transfer, so every poll that lands while it is
-            // re-arming is wasted. Hammering at 1 kHz just manufactured bad words.
-            sleep_us(5000);
+            // 1 kHz poll. Measured clean at 2000 words/s over 25 passes (linkrate.uf2), so
+            // this sits at half the proven rate — comfortable margin, and 1 ms of latency
+            // instead of 5 ms.
+            //
+            // The gap is what matters, not the clock: the GBA slave holds ONE pending transfer
+            // and re-arms with a read-modify-write, so a poll that lands before it has re-armed
+            // is not merely wasted, it corrupts the word. At 100 kHz SCK a 32-bit word occupies
+            // 320 us, so this leaves ~680 us of slack. Do not remove the gap.
+            sleep_us(1000);
         }
     }
 }

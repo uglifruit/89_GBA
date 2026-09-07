@@ -174,6 +174,38 @@ is randomly different depending on when I start the GBA."*
 The fix was a better instrument, not more analysis: `mbrate.uf2` tests **one** speed at a
 time, chosen by hand, with repeated power-cycles. A single success is not reliability.
 
+### Live link, measured with `linkrate.uf2` (2026-09-07)
+
+| Quantity | Value |
+|---|---|
+| SCK | 100 kHz (proven; higher was never fairly tested — see below) |
+| **Sustained word rate** | **2000 words/s clean** — 25 passes, zero errors |
+| Throughput | ~64 kbit/s each way |
+| Round-trip latency | ≤0.5 ms at 2000 words/s |
+
+**The applet now polls at 1 kHz**, half the proven rate, giving 1 ms latency instead of 5 ms.
+
+Two earlier readings were wrong, and both were the instrument rather than the link:
+
+1. *"Heavy corruption even at 50 kHz."* The test sent words **back-to-back with no gap**. The
+   slave holds one pending transfer and re-arms with a read-modify-write of `SIOCNT`, so with
+   no gap the host began clocking the next word before it had re-armed. SCK was never the
+   limiting variable — **the slave's turnaround is**. Andy spotted the contradiction: a link
+   that had worked reliably the day before cannot fail at 50 kHz.
+2. *"Dropped 2, corrupt 4 on every pass."* Rock-steady across a 20× rate range, which cannot
+   be a rate-dependent error. The periodic rate-refresh word was sent **without a gap of its
+   own**, so the ramp word following it landed back-to-back. It fires every 2000 words, so a
+   4096-word pass contained exactly two: two ruined words per pass, at every rate. The
+   instrument was breaking the thing it was measuring.
+
+**Rule that keeps recurring: an out-of-band message must obey the same timing rules as the
+data it interrupts.** Every opcode in a future protocol, not just the streaming ones.
+
+Because both flawed tests confounded the SCK sweep, **SCK above 100 kHz has never been fairly
+measured** — the "nothing above 200 kHz registers" reading was taken with zero gap. There is
+very likely more headroom, but 64 kbit/s already exceeds anything planned, so it is not worth
+chasing.
+
 **Upload time at 100 kHz** — this is what governs how large a payload can be:
 
 | Payload | Time |
