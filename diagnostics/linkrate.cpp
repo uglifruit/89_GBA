@@ -12,31 +12,34 @@
 // repeated measurement, so a failure here always means the live link, never the upload.
 //
 // ─────────────────────────────────────────────────────────────────────────────────────────
-// WHAT THE GBA SHOWS
-//     SCK      the rate the host is currently driving, in kHz
-//     WORDS    sequence-numbered words received at this rate
-//     ERRORS   gaps in that sequence — dropped or corrupted words
-//     verdict  MEASURING until 500 words, then CLEAN or ERRORS
-// Changing rate resets the counts, so the figures always describe the rate beside them.
+// WHAT THE GBA SHOWS — a 0 -> FFFF RAMP
+//     The host counts 0 to FFFF over and over. The bar fills as the current pass advances.
+//     If a word is dropped or corrupted the bar turns amber and a red mark shows exactly
+//     where it broke; the next pass starts clean. Below, tallies of CLEAN and BAD passes,
+//     and a verdict: RELIABLE / DROPPING WORDS / MEASURING.
 //
-// WORKSHOP LEDS — exactly one lit, showing the rate slot:
+//     A full pass is 65536 words, so it takes a while at low rates:
+//         50 kHz ~42 s    100 kHz ~21 s    200 kHz ~10 s
+//        400 kHz  ~5 s    600 kHz  ~4 s      1 MHz  ~2 s
+//     Wait for at least two or three CLEAN passes before believing a rate. One clean pass
+//     proves nothing — assuming otherwise is what produced the wandering multiboot answer.
+//
+// WORKSHOP LEDS — exactly one lit, showing the rate slot. YOU choose it; the tool never
+// changes it by itself.
 //     LED0  50 kHz     LED1 100 kHz    LED2 200 kHz
 //     LED3 400 kHz     LED4 600 kHz    LED5   1 MHz
-// It is SOLID while the upstream tag is intact and BLINKS when the host is seeing bad
-// replies, so both directions are visible without touching the GBA.
+// SOLID while upstream replies are framed correctly, BLINKING when the host is seeing bad
+// words. The GBA screen covers the downstream direction, so between the two both are visible.
+// While the payload is uploading the current LED pulses slowly — deliberately not a sweep
+// across all six, which looked exactly like the tool stepping speeds on its own.
 //
 // CONTROLS
 //     DOWN click = next rate up      UP click = previous rate down
 //
-// HOW TO USE
-//     Let it boot (100 kHz, ~1 s). Step up one rate at a time. At each, wait for the GBA to
-//     leave MEASURING and read the verdict. The fastest rate that stays CLEAN over several
-//     thousand words is the answer.
-//
 // PROTOCOL
-//     Host -> GBA   0xA5 <seq:24>      sequence counter, +1 per word; gaps are the error metric
-//                   0xA6 <rateKHz:16>  current rate, sent ~1/s so the GBA can display it
-//     GBA  -> host  0x600D <errors:16> the GBA's running error count
+//     Host -> GBA   0xA5 <value:16>    the ramp, +1 per word; a gap is a dropped word
+//                   0xA6 <rateKHz:16>  current rate, so the GBA can display and reset on it
+//     GBA  -> host  0x600D <value:16>  where the GBA thinks the ramp has got to
 
 #include "ComputerCard.h"
 #include "gba_spi.h"
@@ -74,6 +77,7 @@ static void core1_entry()
 
         uint8_t  lastSlot = 0xFF;
         uint32_t seq = 0, sinceRate = 0, badRun = 0;
+        (void)badRun;   // counted for clarity, never acted on — see the note below
 
         for (;;) {
             uint8_t s = gS.slot;
@@ -90,7 +94,9 @@ static void core1_entry()
                 }
             }
 
-            uint32_t r = gba_spi_xfer32(0xA5000000u | (seq & 0x00FFFFFFu));
+            // Ramp a 16-bit counter 0 -> 0xFFFF, over and over. The GBA plots how far each
+            // pass gets, so a full clean sweep is visible as a full bar.
+            uint32_t r = gba_spi_xfer32(0xA5000000u | (seq & 0xFFFFu));
             seq++;
             gS.sent = seq;
 
@@ -100,9 +106,13 @@ static void core1_entry()
                 badRun = 0;
             } else {
                 gS.upstreamOk = false;
-                // Only give up after a long run: at the highest rates an occasional bad reply
-                // is the very thing being measured, not a reason to tear the link down.
-                if (++badRun > 4000) break;
+                // NEVER tear the link down from here. The GBA is briefly deaf whenever it
+                // redraws, so runs of bad replies are normal and are precisely what is being
+                // measured. An earlier 4000-word limit fired during ordinary screen updates,
+                // dropped back to re-run multiboot, failed (the console was already booted)
+                // and left the LEDs sweeping the "still uploading" pattern forever — which
+                // looked like the tool cycling speeds on its own.
+                badRun++;
             }
 
             // Re-announce the rate about once a second so a missed announcement cannot leave
@@ -133,8 +143,12 @@ public:
         }
 
         for (int i = 0; i < 6; i++) LedOff(i);
-        if (!gS.linkUp) {                       // still uploading: sweep so it is obviously busy
-            LedOn((tick_ >> 13) % 6, true);
+        if (!gS.linkUp) {
+            // Uploading. Deliberately NOT a sweep across all six LEDs any more: that looked
+            // exactly like the tool stepping through speeds by itself, which is the one thing
+            // this tool must never appear to do — choosing the speed is the operator's job.
+            // A single slow pulse on the current slot is unambiguous.
+            LedOn(gS.slot, (tick_ >> 13) & 1);
             return;
         }
         // Solid = upstream replies are framed correctly; blinking = the host is seeing bad

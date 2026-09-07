@@ -81,9 +81,14 @@ static int text_width(const char *s, int scale)
     return n * FONT_ADV * scale;
 }
 
+// Forward declaration: text() must keep the link serviced between glyphs. A single line of
+// scale-2 text is hundreds of rect() calls, and with the host streaming words back-to-back
+// that was long enough to lose thousands of them — which the host then read as a dead link.
+static void service(void);
+
 static void text(int x, int y, const char *s, uint16_t color, int scale)
 {
-    for (int i = 0; s[i]; i++) glyph(x + i * FONT_ADV * scale, y, s[i], color, scale);
+    for (int i = 0; s[i]; i++) { glyph(x + i * FONT_ADV * scale, y, s[i], color, scale); service(); }
 }
 
 static void text_centre(int y, const char *s, uint16_t color, int scale)
@@ -124,6 +129,12 @@ static uint16_t read_buttons(void)
 #define COL_WAIT   rgb15(31, 14,  4)
 #define COL_BAR    rgb15(10, 22, 31)
 #define COL_HEX    rgb15(31, 31, 31)   // white: the diagnostic line must be easy to read
+#define COL_FAIL   rgb15(31,  6,  6)
+
+#define BAR_X 12
+#define BAR_Y 56
+#define BAR_W 216
+#define BAR_H 22
 
 #define DYN_Y      52    // dynamic widgets live below this
 
@@ -170,11 +181,19 @@ static volatile int g_benchDirty = 1;   // screen needs repainting for the curre
 //   0xA6____xx  low 16 bits = the current SCK rate in kHz, for display
 #define LT_SEQ_MAGIC  0xA5u
 #define LT_RATE_MAGIC 0xA6u
+// The host ramps a 16-bit counter 0 -> 0xFFFF over and over. The GBA plots how far each pass
+// gets: a clean pass fills the bar, a broken one stops where it broke. Whether a full sweep
+// completes, repeatably, at a given rate is the actual question — and this answers it at a
+// glance instead of by comparing two numbers.
 static volatile int      g_linkTest = 0;
-static volatile uint32_t g_ltSeq  = 0;
-static volatile uint32_t g_ltRx   = 0;
-static volatile uint32_t g_ltErr  = 0;
-static volatile uint32_t g_ltRate = 0;   // kHz
+static volatile uint32_t g_ltRate   = 0;   // kHz
+static volatile uint32_t g_ltVal    = 0;   // current value in this pass
+static volatile uint32_t g_ltFailAt = 0;   // where this pass broke
+static volatile int      g_ltFailed = 0;   // this pass has broken
+static volatile uint32_t g_ltPassOk = 0;   // passes that reached 0xFFFF cleanly
+static volatile uint32_t g_ltPassBad= 0;   // passes that broke
+static uint16_t g_ltPrev = 0;
+static int      g_ltHave = 0;
 
 static volatile int      g_enterHits = 0;   // words exactly == BENCH_ENTER
 static volatile int      g_nearHits  = 0;   // words within 4 bits of BENCH_ENTER (corruption)
@@ -214,21 +233,29 @@ static void service(void)
             uint32_t mag = got >> 24;
             if (mag == LT_SEQ_MAGIC) {
                 g_linkTest = 1;
-                uint32_t seq = got & 0x00FFFFFFu;
-                if (g_ltRx && seq != ((g_ltSeq + 1) & 0x00FFFFFFu)) g_ltErr++;
-                g_ltSeq = seq;
-                g_ltRx++;
+                uint16_t v = (uint16_t)(got & 0xFFFFu);
+                if (v == 0) {                       // wrap: score the pass just finished
+                    if (g_ltHave) { if (g_ltFailed) g_ltPassBad++; else g_ltPassOk++; }
+                    g_ltFailed = 0; g_ltFailAt = 0;
+                } else if (g_ltHave && v != (uint16_t)(g_ltPrev + 1)) {
+                    if (!g_ltFailed) { g_ltFailed = 1; g_ltFailAt = g_ltPrev; }
+                }
+                g_ltPrev = v; g_ltHave = 1; g_ltVal = v;
             } else if (mag == LT_RATE_MAGIC) {
                 g_linkTest = 1;
-                // A rate change restarts the count, so the figures on screen always describe
-                // the rate shown beside them and never a blend of two.
-                if ((got & 0xFFFFu) != g_ltRate) { g_ltRate = got & 0xFFFFu; g_ltRx = 0; g_ltErr = 0; }
-                g_benchDirty = 1;
+                // A rate change restarts everything, so what is on screen always describes the
+                // rate shown beside it and never a blend of two.
+                if ((got & 0xFFFFu) != g_ltRate) {
+                    g_ltRate = got & 0xFFFFu;
+                    g_ltPassOk = g_ltPassBad = 0;
+                    g_ltFailed = 0; g_ltFailAt = 0; g_ltHave = 0; g_ltVal = 0;
+                    g_benchDirty = 1;
+                }
             }
         }
 
         REG_SIODATA32 = g_bench      ? ((0x600Du << 16) | (got & 0xFFFFu))          // echo
-                      : g_linkTest   ? ((0x600Du << 16) | (g_ltErr & 0xFFFFu))      // error count
+                      : g_linkTest   ? ((0x600Du << 16) | (uint16_t)g_ltVal)          // where we are
                                      : ((0x600Du << 16) | g_buttons);               // normal
         REG_SIOCNT |= SIO_START;                       // re-arm; also pulls SO low = ready
     }
@@ -258,41 +285,62 @@ int main(void)
         g_buttons = read_buttons();
         service();
 
-        // ── LINK SPEED TEST SCREEN ───────────────────────────────────────────────────────
-        // Reports the rate the host is using and how many sequence gaps have been seen at it.
-        // Drawn sparingly and with service() between every element, so the measurement is not
-        // corrupted by the act of displaying it.
+        // ── LINK SPEED TEST: 0 -> FFFF RAMP ──────────────────────────────────────────────
+        // The host counts 0 to FFFF over and over. The bar shows how far the current pass has
+        // got; if a word is dropped or mangled the pass is marked and the break point is
+        // drawn as a red mark, so a glance says whether a full sweep completes cleanly at
+        // this rate. PASS/FAIL tallies below make repeatability visible without arithmetic.
         if (g_linkTest && !g_bench) {
             char buf[12];
-            uint32_t rx = g_ltRx, err = g_ltErr;
+            uint32_t v = g_ltVal, failAt = g_ltFailAt;
+            int failed = g_ltFailed;
 
-            if (g_benchDirty) {                     // rate changed: repaint the fixed parts
+            if (g_benchDirty) {                       // rate changed: repaint fixed furniture
                 g_benchDirty = 0;
-                rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);  service();
-                text_centre(10, "LINK SPEED TEST", COL_TITLE, 1); service();
+                rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);
+                text_centre(8, "LINK 0-FFFF RAMP", COL_TITLE, 1);
+                rect(BAR_X - 2, BAR_Y - 2, BAR_W + 4, BAR_H + 4, COL_DIM);
             }
 
-            srect(0, 30, SCREEN_W, 60, COL_BG);
+            dec32(buf, g_ltRate, 5);
+            srect(0, 24, SCREEN_W, 18, COL_BG);
+            text(40, 26, "SCK", COL_DIM, 1);
+            text(72, 24, buf, COL_HEX, 2);
+            text(170, 32, "kHz", COL_DIM, 1);
 
-            dec32(buf, g_ltRate, 6);
-            text(30, 32, "SCK", COL_DIM, 1); text(64, 32, buf, COL_HEX, 2);
-            text(190, 40, "kHz", COL_DIM, 1); service();
+            // The bar itself.
+            rect(BAR_X, BAR_Y, BAR_W, BAR_H, COL_BG);          service();
+            int w = (int)(((uint64_t)v * BAR_W) / 0xFFFFu);
+            if (w > 0) rect(BAR_X, BAR_Y, w, BAR_H, failed ? COL_WAIT : COL_OK);
+            service();
+            if (failed) {                                       // mark where it broke
+                int fx = (int)(((uint64_t)failAt * BAR_W) / 0xFFFFu);
+                rect(BAR_X + fx, BAR_Y - 4, 2, BAR_H + 8, COL_FAIL);
+            }
+            service();
 
-            dec32(buf, rx, 8);
-            text(30, 58, "WORDS", COL_DIM, 1); text(96, 58, buf, COL_HEX, 1); service();
+            // Current value, in hex, so the ramp position is readable as a number too.
+            srect(0, BAR_Y + BAR_H + 6, SCREEN_W, 10, COL_BG);
+            hex32(buf, v);
+            text(BAR_X, BAR_Y + BAR_H + 6, buf + 4, COL_HEX, 1);
+            if (failed) {
+                hex32(buf, failAt);
+                text(110, BAR_Y + BAR_H + 6, "BROKE AT", COL_DIM, 1);
+                text(178, BAR_Y + BAR_H + 6, buf + 4, COL_FAIL, 1);
+            }
 
-            dec32(buf, err, 8);
-            text(30, 68, "ERRORS", COL_DIM, 1);
-            text(96, 68, buf, err ? COL_WAIT : COL_OK, 1); service();
+            // Repeatability tally. One clean pass proves nothing; a column of them does.
+            srect(0, 120, SCREEN_W, 30, COL_BG);
+            dec32(buf, g_ltPassOk, 4);
+            text(30, 122, "CLEAN", COL_DIM, 1); text(80, 122, buf, COL_OK, 1);
+            dec32(buf, g_ltPassBad, 4);
+            text(130, 122, "BAD", COL_DIM, 1);  text(168, 122, buf, COL_FAIL, 1);
 
-            // Verdict in words. A count of zero errors over a large sample is the only thing
-            // that means "reliable", and it should not need arithmetic to see.
-            srect(0, 86, SCREEN_W, 22, COL_BG);
-            if (rx < 500)      text_centre(90, "MEASURING", COL_DIM,  2);
-            else if (err == 0) text_centre(90, "CLEAN",     COL_OK,   2);
-            else               text_centre(90, "ERRORS",    COL_WAIT, 2);
+            if (g_ltPassOk && !g_ltPassBad)      text_centre(134, "RELIABLE", COL_OK,   1);
+            else if (g_ltPassBad)                text_centre(134, "DROPPING WORDS", COL_FAIL, 1);
+            else                                 text_centre(134, "MEASURING", COL_DIM, 1);
 
-            for (int i = 0; i < 400; i++) service();
+            for (int i = 0; i < 300; i++) service();
             continue;
         }
 
@@ -335,33 +383,9 @@ int main(void)
         // nibble readout: without it, "the GBA is not recognising the magic word" and "the
         // GBA is not receiving anything" look identical from the bench. With it you can read
         // straight off the screen whether BE7CBE7C is arriving intact.
-        {
-            // ── AUTO-ANALYSIS PANEL ──────────────────────────────────────────────────────
-            // Everything here is derived by the payload, not by eye. The held value updates
-            // twice a second so it can actually be read; the counts never flicker.
-            static uint32_t held = 0; static int holdN = 0;
-            if (++holdN >= 30) { holdN = 0; held = params; }
-            char b[9];
-
-            srect(0, 36, SCREEN_W, 26, COL_BG);
-
-            hex32(b, held);        text( 6, 36, "RX",  COL_DIM, 1);
-                                   text(28, 36, b,     COL_HEX, 1);
-            hex32(b, g_lastBe7c);  text(120, 36, "BE7C", COL_DIM, 1);
-                                   text(156, 36, b + 4, COL_HEX, 1);
-
-            hex32(b, (uint32_t)g_enterHits);
-            text(  6, 46, "EXACT", COL_DIM, 1); text( 46, 46, b + 4, COL_OK,   1);
-            hex32(b, (uint32_t)g_nearHits);
-            text( 84, 46, "NEAR",  COL_DIM, 1); text(118, 46, b + 4, COL_WAIT, 1);
-            hex32(b, (uint32_t)g_be7cHits);
-            text(150, 46, "TOP",   COL_DIM, 1); text(178, 46, b + 4, COL_HEX,  1);
-        }
-
-        // Activity pip: steps across on every received word, so liveness is visible even if
-        // the params themselves are wrong.
-        srect(0, DYN_Y + 12, SCREEN_W, 4, COL_BG);
-        srect(8 + (int)((rx >> 2) % 28) * 8, DYN_Y + 12, 6, 4, linkUp ? COL_OK : COL_DIM);
+        // (The raw-word / EXACT / NEAR / TOP analysis panel that lived here has been removed:
+        // the 0-FFFF ramp screen answers the same question far better, and this is the normal
+        // operating UI rather than a diagnostic.)
 
         // Button indicators.
         for (int b = 0; b < 10; b++) {
