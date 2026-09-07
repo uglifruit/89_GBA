@@ -108,7 +108,7 @@ static void core1_entry()
                 // would describe a blend of two rates.
                 for (int i = 0; i < 8; i++) {
                     gba_spi_xfer32(0xA6A60000u | kWordHz[s]);
-                    sleep_us(300);
+                    sleep_us(2000);      // generous: this happens once, and must not be missed
                 }
             }
 
@@ -140,9 +140,18 @@ static void core1_entry()
 
             // Re-announce the rate about once a second so a missed announcement cannot leave
             // the display permanently wrong.
+            // The periodic rate refresh needs THE SAME GAP as a ramp word. Without one, the
+            // ramp word that follows it lands back-to-back and the slave has not re-armed —
+            // so the refresh itself destroyed a word.
+            //
+            // This was the "dropped 2, corrupt 4" baseline Andy measured on every single pass
+            // from 100 to 2000 words/s. It fires every 2000 words, so a 4096-word pass
+            // contains exactly two of them: two ruined words, every pass, independent of rate.
+            // A word counter, not a timer, which is precisely why the figure never moved.
             if (++sinceRate > 2000) {
                 sinceRate = 0;
                 gba_spi_xfer32(0xA6A60000u | kWordHz[s]);
+                if (g) sleep_us(g);
             }
         }
     }
