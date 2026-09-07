@@ -1,6 +1,10 @@
 # Bench test plan — 2026-09-04
 
-> # RESOLVED — THE LINK WORKS (2026-09-06)
+> # RESOLVED — THE LINK WORKS, AND IS CHARACTERISED (2026-09-07)
+> Multiboot 100 kHz · 2000 words/s sustained (~64 kbit/s) · round trip ≤0.5 ms ·
+> 32 KB payload uploads in ~5 s. Full record and the measurement mistakes made along the
+> way: [`POSTMORTEM.md`](POSTMORTEM.md).
+>
 > The GBA boots, runs the payload, shows *"MTM - Workshop Computer Link"*, and reports its
 > buttons back. **For what actually went wrong and why, read
 > [`POSTMORTEM.md`](POSTMORTEM.md).** This plan is kept as the re-test procedure for a rewire,

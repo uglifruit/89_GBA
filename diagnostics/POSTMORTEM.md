@@ -237,7 +237,24 @@ makes it worth disturbing a working path. It is not worth it today.
 | `cablecheck.uf2` | **Which wire carries the GBA's SO** — the crossover, by measurement |
 | `linkcheck.uf2` | Sampling variants, and the **word readout** that exposed the inversion |
 | `handshake.uf2` | Disproved the `0x0000` theory in one run |
-| `mbrate.uf2` | The reliable multiboot rate — by testing one speed at a time, by hand |
+| `mbrate.uf2` | The reliable multiboot rate — one speed at a time, by hand |
+| `linkrate.uf2` | The sustained word rate, reported on the GBA's own screen |
+| `bandwidth.uf2` | **Superseded** by mbrate + linkrate. Its automatic sweep judged "clean or not" itself, so any fault in the harness returned a bare zero indistinguishable from a real ceiling of zero. Kept only as a record of what not to do. |
+
+### Lesson 9 — the operator is a better controller than the algorithm
+
+Three automatic sweeps in a row produced unusable numbers, and each time the fix was to hand
+control back: **one variable, chosen by hand, repeated deliberately.**
+
+`mbrate` replaced an automatic rate ladder that reported whichever rung it happened to be on
+when the console became ready — timing luck dressed as a measurement, and Andy caught it from
+the outside (*"the speed is randomly different depending on when I start the GBA"*).
+`linkrate` replaced a sweep that returned zero for four different reasons. Both replacements
+are slower to run and far harder to fool, and both were Andy's design.
+
+The related habit: **a single success is not reliability.** Reporting 200 kHz off one reading
+is what sent the multiboot rate wrong in the first place; twenty power-cycles at one speed is
+what settled it.
 
 `cablecheck` exists only because **Pulse In 2 (GPIO 3) was unused** by the project. Having a
 spare input to listen on turned an unresolvable argument into a two-minute measurement. Worth

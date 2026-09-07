@@ -49,11 +49,25 @@ These are the ones that silently break things if ignored:
    inversion derivation in `gba_spi.pio`. Getting this wrong = "nothing works".
 3. **Pin map** (RP2040 GPIO): Pulse Out 1 = **8**, Pulse Out 2 = **9**, Pulse In 1 = **2**,
    Pulse In 2 = **3**. LEDs 10–15. Audio DAC on SPI0 (18/19/21) — **do not touch SPI0**.
-4. **Pulse In 1 (GPIO 2) is a slow transistor gate input**, not a clean logic pin. It is the
-   project's one unproven hardware assumption: can it cleanly clock the GBA's SO at 100 kHz?
-   If the multiboot handshake never syncs on real hardware, suspect this first (loopback
-   diagnostic: jumper Pulse Out 2 → Pulse In 1, ramp the rate).
-5. **The HAL samples pulse inputs only at 48 kHz.** For the SPI link we read GPIO 2 via PIO,
+4. **Pulse In 1 (GPIO 2) is a slow transistor gate input**, not a clean logic pin, and it
+   **INVERTS** — `GBA_MISO_INOVER = GPIO_OVERRIDE_INVERT`. This was the single most expensive
+   bug in the project: a scope check that appeared to prove otherwise had both probes on the
+   same net, either side of a patch cable. The GBA settled it by replying `0x8DFD9DFD`, the
+   exact bit-complement of the expected `0x72026202`.
+   Its **bandwidth was never the problem** — that long-flagged risk is closed. It carries
+   2000 words/s cleanly (~64 kbit/s). What limits the link is the **GBA slave's re-arm gap**,
+   not this input.
+5. **EVERY transfer needs an inter-word gap.** The GBA slave holds exactly ONE pending
+   transfer and re-arms with a read-modify-write of `SIOCNT`; a word clocked before it has
+   re-armed is not merely lost, it is corrupted (bit-slip). At 100 kHz SCK a 32-bit word takes
+   320 µs and ~180 µs of gap is ample; zero gap fails completely. **This applies to every
+   message, including out-of-band ones** — a rate-announce word sent without a gap silently
+   destroyed the word after it and produced a fixed error count that looked like a hardware
+   floor.
+6. **The link cable CROSSES SO/SI.** Measured, not assumed — `cablecheck.uf2` listens on Pulse
+   In 1 and Pulse In 2 at once and reports which wire actually carries the GBA's SO. Sources
+   genuinely disagree about GBA cable wiring; do not reason about it, measure it.
+7. **The HAL samples pulse inputs only at 48 kHz.** For the SPI link we read GPIO 2 via PIO,
    never `PulseIn1()`.
 
 ## Architecture (two cores)
@@ -79,8 +93,11 @@ These are the ones that silently break things if ignored:
   `akkera102/gba_01_multiboot` and the RP2040 port `copyrat90/gba-pico-gamepad`. If you touch
   the transfer loop, cross-check against both. Key numbers: LCG mult `0x6F646573`, key
   `0x43202F2F`, CRC poly `0xC37B`, CRC seed `0xC387`, offset transform `0xFE000000 - i`.
-- Transport is **mode 3 SPI (CPOL=1, CPHA=1), MSB-first, 32-bit**, RP2040 = clock master,
-  100 kHz (slow on purpose for the transistor input; multiboot imposes no minimum rate).
+- Transport is **mode 3 SPI (CPOL=1, CPHA=1), MSB-first, 32-bit**, RP2040 = clock master.
+  GBATEK, *SIO Normal Mode*: SC idles HIGH, both ends drive on the falling edge and sample on
+  the rising edge. **Multiboot runs at 100 kHz** — measured repeatable; 200 kHz is marginal and
+  leaves the console restarting its boot, which is worse than running slower. Post-boot the
+  applet polls at **1 kHz**.
 - PIO core follows the Raspberry Pi pico-examples SPI CPHA=1 program.
 
 ## The GBA payload
@@ -120,5 +137,12 @@ cd payload && ./build.sh
   of 48 MHz → tidy PIO clkdivs).
 - `info.yaml` follows Tom's format (no quotes, `draft: false`); it documents the jack/LED
   panel labels for the release.
-- Flag the Pulse-In-1 bandwidth risk in any status update — it's the make-or-break unknown
-  until proven on hardware.
+- **Measured link numbers** (`diagnostics/POSTMORTEM.md` has the full record): multiboot
+  100 kHz, sustained 2000 words/s clean, ~64 kbit/s, round trip ≤0.5 ms, 32 KB payload uploads
+  in ~5 s. SCK above 100 kHz has never been *fairly* tested — the readings that suggested a
+  ceiling were taken with zero inter-word gap, so they measured the re-arm race instead.
+- **When a measurement contradicts something already known to work, doubt the measurement.**
+  Several days went into faults that turned out to be in the diagnostics rather than the
+  hardware: a scope probe on the wrong net, a loopback with a structural blind spot, a
+  diagnostic that blocked the 48 kHz callback, and an instrument that corrupted the very
+  words it was counting. `POSTMORTEM.md` records each one and how it was caught.

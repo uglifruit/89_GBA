@@ -44,10 +44,12 @@ clocking when it boots. Power-cycle the *GBA* to retry. Cartridge-less, on the l
 - **Multiboot upload.** The RP2040 runs the documented single-cartridge multiboot
   handshake (sync → header → palette/handshake → encrypted payload → CRC) and streams a
   small program into the GBA's EWRAM, which the BIOS then runs. See `gba_multiboot.cpp`.
-- **Live link.** After boot, the RP2040 polls the GBA at ~200 Hz: it sends four parameter
+- **Live link.** After boot, the RP2040 polls the GBA at **1 kHz**: it sends four parameter
   bytes and receives the button bitfield, framed with a `0x600D` tag. See `gba_link.cpp`.
-  The rate is deliberately modest - the GBA slave holds only one pending transfer and is
-  briefly deaf while re-arming, so polling faster just manufactures rejected words.
+  The inter-word gap is what matters, not the clock: the slave holds only one pending
+  transfer and re-arms with a read-modify-write, so a poll landing before it has re-armed
+  corrupts the word rather than merely wasting it. 2000 words/s is measured clean, so 1 kHz
+  runs at half the proven rate.
 - **Two cores.** ComputerCard's 48 kHz audio/CV loop runs on **core 0** (`main.cpp
   ProcessSample`). The entire GBA link engine runs on **core 1** and talks to core 0 only
   through the lock-free `GbaShared` struct — the audio path is never blocked. This reuses
@@ -114,11 +116,15 @@ real `gbafix`/devkitARM it uses those instead. See [`payload/README.md`](payload
 - [x] Two-core architecture + live polling loop
 - [x] GBA payload source + build pipeline (compiles & links; `_start` at `0xC0`)
 - [x] **Real bootable payload baked in** — valid Nintendo logo + passing header complement
-      (`gba_payload.h`, 624 bytes); firmware builds clean with it
-- [ ] Hardware bring-up: confirm the Pulse In 1 transistor input can clock the GBA's SO
-      cleanly at 100 kHz (a loopback diagnostic is described in the project plan). This is
-      the one unproven hardware assumption.
-- [ ] Grow the payload into a real on-screen UI
+- [x] **Hardware bring-up complete.** The GBA boots, runs the payload, shows
+      *"MTM - Workshop Computer Link"*, and reports its buttons back. The Pulse In 1
+      bandwidth question — flagged from the start as the make-or-break unknown — turned out
+      **not** to be the problem at all; see [`diagnostics/POSTMORTEM.md`](diagnostics/POSTMORTEM.md).
+- [x] **Link characterised**: multiboot 100 kHz, 2000 words/s sustained (~64 kbit/s),
+      round trip ≤0.5 ms, 32 KB payload uploads in ~5 s
+- [ ] Protocol v1: typed opcodes shared by both sides
+- [ ] On-screen menu + app framework
+- [ ] Apps: chiptune voice, performance pads, sequencer, scope
 
 ## Files
 
