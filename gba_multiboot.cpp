@@ -125,8 +125,11 @@ bool gba_wait_slave_ready(uint32_t timeoutMs)
     return true;
 }
 
+volatile uint32_t gba_mb_progress = 0;
+
 MultibootResult gba_multiboot_send(const uint8_t *rom, size_t rom_size)
 {
+    gba_mb_progress = 0;
     if (!rom || rom_size < 0xC0) return MultibootResult::BadPayload;
 
     // Round the payload up to a 16-byte boundary, matching the reference uploaders.
@@ -196,7 +199,10 @@ MultibootResult gba_multiboot_send(const uint8_t *rom, size_t rom_size)
         // Each data word echoes back the *previous* offset in its high half; the GBA
         // reports the current offset & 0xFFFF. A mismatch means the link corrupted.
         uint32_t chk = xfer(enc) >> 16;
-        if (chk != (i & 0xFFFF)) return MultibootResult::TransferError;
+        if (chk != (i & 0xFFFF)) { gba_mb_progress = 0; return MultibootResult::TransferError; }
+        // Cheap: an integer divide every word is nothing next to a 320 us SPI transfer, and the
+        // firmware links libgcc so a variable divisor is fine here (unlike the GBA payload).
+        gba_mb_progress = ((i - 0xC0) * 100u) / (fsize - 0xC0);
     }
 
     // ---- 6. Final CRC handshake -------------------------------------------------

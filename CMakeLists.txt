@@ -25,7 +25,8 @@ pico_sdk_init()
 add_executable(${CARD_NAME}
     main.cpp
     gba_multiboot.cpp
-    gba_link.cpp)
+    gba_link.cpp
+    patch_store.cpp)
 pico_generate_pio_header(${CARD_NAME} ${CMAKE_CURRENT_LIST_DIR}/gba_spi.pio)
 target_include_directories(${CARD_NAME} PUBLIC ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(${CARD_NAME}
@@ -37,6 +38,8 @@ target_link_libraries(${CARD_NAME}
     hardware_adc
     hardware_spi
     hardware_pio
+    hardware_flash
+    pico_flash
     pico_multicore)
 pico_add_extra_outputs(${CARD_NAME})
 target_compile_definitions(${CARD_NAME} PRIVATE PICO_XOSC_STARTUP_DELAY_MULTIPLIER=64)

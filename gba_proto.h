@@ -122,6 +122,15 @@ static inline int gba_stream_valid(uint32_t w)
 #define GBA_OP_KNOB         0x03u   // arg: [23:22] index, [21:10] 12-bit value
 #define GBA_OP_SWITCH       0x04u   // arg: 0 = down, 1 = middle, 2 = up
 
+// ---- patch transfer, host -> GBA (a LOAD) ----
+// One byte per word, each carrying its own index, so a dropped word leaves a hole the receiver
+// can see rather than silently shifting everything after it. 232 bytes is about a quarter of a
+// second at the 1 kHz poll rate, which is a fine price for a deliberate action.
+#define GBA_OP_PATCH        0x05u   // arg: [23:16] byte index, [15:8] byte value
+#define GBA_OP_PATCH_DONE   0x06u   // arg: [7:0] slot, bit 7 set = slot was empty
+#define GBA_OP_PATCH_ACK    0x07u   // arg: [7:0] slot — host has stored a complete patch
+#define GBA_OP_SLOTS        0x08u   // arg: [15:0] bitmask of slots that hold a patch
+
 // Capability flags carried by GBA_OP_HELLO. The GBA shows these on its CAL page so you can
 // tell a tuning problem from an uncalibrated module without opening the source.
 #define GBA_CAP_CVOUT_CAL   (1u << 0)   // ComputerCard::CVOutsCalibrated() was true
@@ -150,6 +159,8 @@ static inline uint32_t gba_knob_pack(uint32_t idx, uint32_t val12)
 #define GBA_UP_STATUS       0x601Eu   // [15:12] edit page, [11:8] mode, [7:0] flags
 #define GBA_UP_NOTE         0x602Au   // [15:8]  MIDI note, [7:0] gate/velocity
 #define GBA_UP_PARAM        0x6033u   // [15:8]  param id, [7:0] value
+#define GBA_UP_PATCH        0x6047u   // [15:8]  byte index, [7:0] byte value (a SAVE)
+#define GBA_UP_REQ          0x6058u   // [15:12] request, [11:8] slot
 
 #define GBA_UP_TAG(w)       ((w) >> 16)
 #define GBA_UP_DATA(w)      ((w) & 0xFFFFu)
@@ -162,6 +173,17 @@ static inline uint32_t gba_up_pack(uint32_t tag, uint32_t data16)
 // Modes reported in GBA_UP_STATUS [11:8].
 #define GBA_MODE_PLAY       0u
 #define GBA_MODE_EDIT       1u
+
+// GBA_UP_REQ requests, in [15:12].
+#define GBA_REQ_SAVE        1u       // "take the patch I am about to stream and store it in slot"
+#define GBA_REQ_LOAD        2u       // "send me the patch in slot"
+#define GBA_REQ_SAVE_END    3u       // "that was the whole patch"
+
+// Patch storage geometry. 16 slots of 256 bytes is exactly one 4 kB flash sector on the RP2040,
+// which matters: the sector is the erase unit, so a whole sector is read, modified and rewritten
+// for every save. Keep sizeof(Patch) under PATCH_SLOT_BYTES.
+#define GBA_PATCH_SLOTS      16
+#define GBA_PATCH_SLOT_BYTES 256
 
 // Status flags, GBA_UP_STATUS [7:0].
 #define GBA_FLAG_NOTE_ON    (1u << 0)

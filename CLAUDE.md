@@ -150,6 +150,28 @@ C-compatible (payload is C, firmware is C++): plain `#define` and `static inline
    IRQ never fires the payload degrades to exactly the polled behaviour that has always worked,
    instead of going deaf and looking like a failed multiboot. The CAL page shows which is live.
 
+## Payload UI rules (learned the hard way, all of them)
+
+1. **NEVER ERASE THEN DRAW.** Every flickering region had the same shape: clear a box to the
+   background, then paint into it, once per frame. Two rules fix it everywhere — paint
+   continuously-changing regions in ONE overwriting pass (background band, then value band), and
+   compare rendered text against what is on screen and skip when unchanged. Static legends are
+   drawn once, never per frame.
+2. **A cache key must include everything that changes the drawing.** The MAP column cursor was
+   folded into every row's comparison string, so moving it repainted all seven rows; the VOICE
+   page's labels changed with the channel while only values were compared, leaving stale labels.
+3. **A clear must not reach past what it owns.** The list clear covered the full ten-row height
+   regardless of the page, erasing legends drawn below it. It now clears the taller of the old
+   and new layouts and nothing more.
+4. **`dec32()` right-aligns into a FIXED width and drops leading digits when it does not fit.**
+   `dec32(buf, 10, 1)` yields `"0"` — that printed every envelope time above 5 ms as `0 MS`. Use
+   `dec_at()` for anything whose digit count varies.
+5. **Watch the buffer sizes.** The CAL line composes to 29 characters and had a 24-byte buffer;
+   the stack smash made its redraw guard never hold, so it drew, cleared and redrew for ever.
+6. **The `-nostdlib` tripwire is doing real work.** It has caught a `% rows` with a variable
+   divisor, a drum-sweep divide, and an implicit `memcpy` from a struct assignment — each a LINK
+   error rather than a silent bug. Do not "fix" it by linking libgcc.
+
 ## The multiboot protocol
 
 - `gba_multiboot.cpp` implements the single-cartridge / download-play upload: sync (`0x6202`
@@ -169,6 +191,9 @@ C-compatible (payload is C, firmware is C++): plain `#define` and `static inline
 
 ## The GBA payload
 
+- **No splash screen on a normal boot.** The green screen `crt0.s` paints in assembly is the
+  boot proof; a title card after it was on screen for about as long as it took to clock one word.
+  A message is drawn ONLY if the host stays silent, which is the one case where it says something.
 - `payload/` is a **self-contained GBA-side sub-project** (no libgba, no libc) built for
   ARM7TDMI (armv4t). Modules: `link` (serial slave + IRQ), `psg` (registers), `synth` (voice,
   mod matrix, envelope), `ui` (play screen + five editor pages), `gfx`, `diag`, `main`.

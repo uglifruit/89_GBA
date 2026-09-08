@@ -1,9 +1,9 @@
 draft: false
 Name: GBA PSG Voice
-Description: Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then plays it as a chiptune synth voice with the sound editor on the GBA's own screen
+Description: Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then plays it as a chiptune synth voice with the whole sound editor on the GBA's own screen
 Language: C++ (RP2040 Pico SDK) + C (GBA payload)
 Creator: Andy Jenkinson (uglifruit)
-Version: 0.2.0
+Version: 0.3.0
 Status: Work in progress
 License: MIT
 Repository: https://github.com/TomWhitwell/Workshop_Computer/tree/main/releases/89_GBA
@@ -15,13 +15,14 @@ tags:
   - chiptune
   - psg
   - synth voice
+  - drums
   - screen
   - experimental
 
 manual: |
-  GBA PSG Voice turns the Workshop Computer into a Game Boy Advance link-cable master and
-  the GBA into a synth voice you play from the rack. Wire a bare GBA link socket to the
-  pulse jacks (common ground), with 1k series resistors on the two lines the module drives:
+  GBA PSG Voice turns the Workshop Computer into a Game Boy Advance link-cable master and the
+  GBA into a synth voice you play from the rack. Wire a bare GBA link socket to the pulse jacks
+  (common ground), with 1k series resistors on the two lines the module drives:
 
     Pulse Out 1 -> GBA SC   (serial clock)   1k
     Pulse Out 2 -> GBA SI   (serial in)      1k
@@ -31,28 +32,34 @@ manual: |
   diagnostics/cablecheck.uf2 and run MODE 0, which reports which wire actually carries SO.
 
   Power the Computer first, then the GBA - the console only syncs if the master is already
-  clocking when it boots. Cartridge-less, on the logo screen. The module uploads the
-  instrument over the link in about two and a half seconds.
+  clocking when it boots. Cartridge-less, on the logo screen. The instrument uploads in about
+  six seconds; the module's LEDs show a progress bar while it does.
 
-  The GBA makes the sound on its own PSG hardware and puts it out of its HEADPHONE JACK,
-  which goes to the rack. It is around 1 Vpp against Eurorack's 10 Vpp, so it will be quiet.
-  The original GBA and the Game Boy Micro have a headphone socket; the GBA SP does not and
-  needs the official SP adapter.
+  POWER-CYCLE THE GBA WHENEVER YOU RE-FLASH THE WORKSHOP. A console already running a payload
+  never answers a multiboot sync, so the host retries for ever: LED 0 blinking, LED 1 lit, and
+  nothing reaching the screen.
 
-  Defaults: CV In 2 is 1V/oct pitch, Pulse In 2 is the gate, CV In 1 sweeps pulse duty,
-  Audio In 1 detunes the second square, Audio In 2 brings in the noise channel. All four CV
-  inputs are re-assignable on the GBA's MAP page.
+  The GBA makes the sound on its own PSG hardware and puts it out of its HEADPHONE JACK, which
+  goes to the rack. It is around 1 Vpp against Eurorack's 10 Vpp, so it will be quiet. The
+  original GBA and the Game Boy Micro have a headphone socket; the GBA SP does not and needs the
+  official SP adapter.
 
-  On the GBA, PLAY mode gives you D-pad up/down for octave, left/right for detune, the
-  shoulder buttons for the two square duties, A to trigger by hand and B to latch. START
-  opens the editor; SELECT cycles its five pages (VOICE, ENVELOPE, SWEEP, MAP, CAL).
+  Defaults: CV In 2 is 1V/oct pitch, Pulse In 2 and the momentary switch are triggers, CV In 1
+  sweeps pulse duty, Audio In 1 detunes the second square, Audio In 2 drives the noise channel.
+  All four jacks and the three knobs are re-assignable on the GBA's MAP page, each with its own
+  set of per-voice tickboxes.
+
+  On the GBA, START opens the editor and SELECT + Left/Right walks its eleven pages: CHAN, TRIG,
+  ENV, MIX, BTN, MAP, ORN, DRUM, MEM, CAL, SET. Editing is A + D-pad throughout; inside a menu
+  no button carries its performance meaning.
 
   The CAL page trims the CV input scale and offset. The module's CV OUTPUTS are factory
-  calibrated from its EEPROM, so the quantised pitch out is in tune for free, but the CV
-  INPUTS are not calibrated at all - so 1V/oct tracking on CV In 2 has to be trimmed once,
-  with the live note readout on that page to trim against.
+  calibrated from its EEPROM, so the quantised pitch out is in tune for free, but the CV INPUTS
+  are not calibrated at all - so 1V/oct tracking on CV In 2 has to be trimmed once, with the
+  live note readout on that page to trim against.
 
-  The patch lives in GBA RAM and is lost when the console powers off.
+  Sixteen patches are stored on the card itself (MEM page: A+UP saves, B+DOWN loads). Saving
+  erases a flash sector, which briefly stops the audio - expect a click.
 
 panel:
   inputs:
@@ -71,6 +78,15 @@ panel:
     - id: Audio2
       name: Noise
       description: Noise channel level by default; re-assignable on the MAP page
+    - id: Main
+      name: Knob A
+      description: Free modulation source, assignable on the MAP page
+    - id: X
+      name: Knob B
+      description: Free modulation source, assignable on the MAP page
+    - id: Y
+      name: Knob C
+      description: Free modulation source, assignable on the MAP page
     - id: PulseIn1
       name: GBA SO (MISO)
       description: Serial data back from the GBA. Read directly via PIO, not the 48kHz pulse path
@@ -95,16 +111,20 @@ panel:
       description: Follows Pulse In 2
 
 controls:
+  switch:
+    - id: Down
+      name: Trigger
+      description: Momentary down fires a note; a column of the GBA's TRIG grid
   leds:
     - id: LED0
       name: Link (solid booted, blinking connecting)
     - id: LED1
-      name: Gate in
+      name: Gate in / upload progress / fault code bit 0
     - id: LED2
-      name: Note sounding
+      name: Note sounding / upload progress / fault code bit 1
     - id: LED3
-      name: Editing on the GBA
+      name: Editing on the GBA / upload progress / fault code bit 2
     - id: LED4
-      name: Edit page, bit 0
+      name: Edit page bit 0 / upload progress
     - id: LED5
-      name: Edit page, bit 1
+      name: Edit page bit 1 / upload progress

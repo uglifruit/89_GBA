@@ -11,8 +11,13 @@ logo screen.
 
 ### 1. It boots
 
-**Expect:** after ~2.5 s a brief **green flash**, then *"MTM - Workshop Computer Link"* and
-*"GBA PSG VOICE"*, then the play screen. Workshop **LED 0 goes solid**.
+**Expect:** a **green screen** while the payload uploads (about six seconds, with LEDs 1-5
+running as a progress bar), then straight to the play screen. Workshop **LED 0 goes solid**.
+
+There is deliberately no title card: the green screen is the boot proof, and the host starts
+talking within milliseconds of the link coming up. If the host stays silent you get
+*WAITING FOR HOST* instead — that message existing at all means the image ran and the link did
+not.
 
 **The green flash is a deliberate boot proof**, painted in assembly before the C runtime
 exists. It makes three previously identical white screens tell themselves apart:
@@ -26,6 +31,10 @@ exists. It makes three previously identical white screens tell themselves apart:
 *If it stays WHITE:* flash `diagnostics/mbrate.uf2` and leave it on LED 3 (100 kHz). Power-cycle
 the GBA a few times. Solid = the upload itself is fine and the fault is in the image; blinking
 = multiboot is failing and nothing in the payload is implicated.
+
+*If LED 0 blinks and LED 1 is lit on its own:* that is the NoGBA code — nothing answered the
+sync. Almost always it means **the console is still running the previous payload**; power-cycle
+it. This is the single most common way to lose an afternoon here.
 
 *If the title appears but the play screen never does:* the host is not talking. LED 0 will be
 blinking. The splash holds for about 3 s and then gives up, so this is visible.
@@ -96,11 +105,78 @@ screen's input meters show this immediately.
 
 ### 7. The editor
 
-**Expect:** `START` toggles PLAY ⇄ EDIT (LED 3 follows). `SELECT` cycles five pages, and
-**LEDs 4+5 show the page number in binary**. D-pad moves and changes; L/R change by 8.
+**START** opens it and always lands on the first page. **SELECT + Left/Right** walks the tab bar.
 
-On the **MAP** page, re-point one input at a different destination and confirm it takes effect
-immediately, with no rebuild. That is the whole architectural claim in one test.
+| | |
+|---|---|
+| D-pad alone | move the cursor (row, and on grid pages a column) |
+| **A** + Up/Down | change the value |
+| **A** + Left/Right | change coarsely, or the row's second field |
+| **START** | back to the performance screen |
+
+**No button carries its performance meaning inside a menu** — not trigger, not hold, not the
+mapped D-pad actions. HOLD set before you entered still holds, so latch a drone in PLAY and then
+go and edit it.
+
+Worth checking specifically:
+
+- **CHAN** — all four channels side by side. Cells a channel does not have read `-` and ignore
+  edits: only channel 1 has a sweep, only channel 2 a detune partner, only channel 3 a wavetable,
+  and channel 4 is not pitched.
+- **TRIG** — the pin grid, A alone toggles. Turn every column off for channel 1 and it should go
+  silent even with HOLD on; a channel wired to nothing is parked on purpose.
+- **MIX** — Left/Right picks a channel, A+Up/Down sets level, A+Left/Right sets OFF/L/R/BOTH. The
+  dim bar is the fader, the bright bar inside it is the live envelope.
+- **MAP** — seven sources, each with a destination, an amount and four per-voice tickboxes (A
+  toggles a tick). Set one to `ORNMNT`: the amount column becomes a slot, and the source works as
+  a switch above halfway.
+- **ORN** — sixteen steps, edited graphically. A+Up/Down is a semitone, A+Left/Right an octave.
+- **DRUM** — arm DRUM MODE, then any input going high fires its sound. Drums borrow channels 1
+  and 4 while armed.
+- **SET** — pick a USER scale, then on `SCALE NOTES` use Left/Right to walk the twelve degrees and
+  A+Up/Down to switch each on or off.
+
+### 7b. The Workshop switch plays notes
+
+Flicking the momentary switch **down** fires a note in both modes. It is a column of the TRIG
+grid, and the host sends it with priority the moment it moves.
+
+### 7c. HOLD
+
+**B** in PLAY latches: on fires a note and sustains it, off releases. Nothing else — no retrigger
+on repeated presses, and no effect inside the editor.
+
+### 7d. The envelope actually moves
+
+On ENV, set ATTACK to about 250 MS and hold a note. The volume should **rise** to full, fall to
+sustain, and stay there until release.
+
+*This is the specific thing that was broken once.* The PSG only loads an envelope register's
+volume into the channel **on a trigger** — writing it while the channel plays is ignored ("zombie
+mode"). Our envelopes are computed in software, so every attack and decay step was discarded and
+the note came out at whatever volume it was triggered at. A volume change is now a trigger, which
+is what tracker engines on this hardware do.
+
+*What to listen for:* a retrigger resets the waveform phase, so **listen to the noise channel** —
+its LFSR restarts too, and a fast decay could buzz rather than fade.
+
+### 7e. Portamento
+
+`PORTAMENTO` on ENV, per channel. 0 is instant; higher slides. Set a long one and flip between
+PLAY and an edit page — the slide should sound **identical**. It did not once: the control tick
+only advanced once per main-loop pass, so its rate was the frame rate and a heavier page ran the
+envelopes slower. The tick now runs while the screen is drawn.
+
+### 7f. Patches
+
+On **MEM**, the D-pad walks the sixteen slots (Left/Right one box, Up/Down a row of eight).
+**A+Up saves, B+Down loads.** The bar shows progress; the box fills once a slot holds something.
+
+Expect a **click** on save: erasing flash stops XIP, so the 48 kHz callback does not run for the
+few milliseconds the write takes.
+
+Then the real test: **save, power-cycle the GBA, load it back.** The patch lives on the card, so
+it should survive the console losing power entirely.
 
 ### 8. Soak
 

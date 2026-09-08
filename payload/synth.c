@@ -5,12 +5,16 @@
 #include "link.h"
 #include "notes.h"
 
+// One patch must fit one flash slot on the Workshop, because the flash sector is the erase unit
+// and sixteen slots are one sector. If this ever fires, drop an ornament slot rather than
+// widening the slot: the transfer time is a byte per link word.
+typedef char patch_fits_a_slot[(sizeof(Patch) <= GBA_PATCH_SLOT_BYTES) ? 1 : -1];
+
 #define REG_BASE     0x04000000
 #define REG_KEYINPUT (*(volatile uint16_t *)(REG_BASE + 0x0130))
 #define REG_TM0CNT_L (*(volatile uint16_t *)(REG_BASE + 0x0100))
 #define REG_TM0CNT_H (*(volatile uint16_t *)(REG_BASE + 0x0102))
 
-// GBA key bits, active-low in the register. Same layout the host uses (gba_link.h GbaKey).
 #define KEY_A      (1u << 0)
 #define KEY_B      (1u << 1)
 #define KEY_SELECT (1u << 2)
@@ -22,21 +26,96 @@
 #define KEY_R      (1u << 8)
 #define KEY_L      (1u << 9)
 
-const char *dest_name[DEST_COUNT] = {
-    "---", "PITCH", "DUTY", "DETUNE", "NOISE", "WAVE", "GLIDE", "DECAY", "SWEEP"
+static const uint16_t BTN_BIT[BTN_SLOTS] = {
+    KEY_A, KEY_B, KEY_L, KEY_R, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT
 };
-const char *src_name[SRC_COUNT] = { "CV 1", "CV 2", "AUD 1", "AUD 2" };
+const char *btn_name[BTN_SLOTS] = { "A", "B", "L", "R", "UP", "DOWN", "LEFT", "RIGHT" };
+
+const char *dest_name[DEST_COUNT] = {
+    "---", "PITCH", "LEVEL", "DUTY", "DETUNE", "GLIDE", "DECAY",
+    "SWEEP", "N PITCH", "ORNMNT", "ORNRATE", "SCALE", "KEY"
+};
+const char *src_name[SRC_COUNT] = { "CV 1", "CV 2", "AUD 1", "AUD 2", "MAIN", "KNOB X", "KNOB Y" };
+const char *trig_name[TRIG_COUNT] = { "PU2", "SW", "BTN" };
+const char *pan_name[4] = { "OFF", "L", "R", "BOTH" };
+const char *key_name[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+
+const char *scale_name[SCALE_COUNT] = {
+    "CHROMATIC", "MAJOR", "DORIAN", "PHRYGIAN", "LYDIAN", "MIXOLYD", "MINOR", "LOCRIAN",
+    "HARM MIN", "PENTA MAJ", "PENTA MIN", "BLUES", "HIRAJOSHI", "IN SEN", "WHOLE",
+    "USER 1", "USER 2", "USER 3", "USER 4"
+};
+
+// Scale membership as a 12-bit mask: bit n set if semitone n above the key is in the scale.
+static const uint16_t SCALE_MASK[SCALE_BUILTIN] = {
+    0x0FFF,   // chromatic    everything
+    0x0AB5,   // major        0 2 4 5 7 9 11
+    0x06AD,   // dorian       0 2 3 5 7 9 10
+    0x05AB,   // phrygian     0 1 3 5 7 8 10
+    0x0AD5,   // lydian       0 2 4 6 7 9 11
+    0x06B5,   // mixolydian   0 2 4 5 7 9 10
+    0x05AD,   // aeolian      0 2 3 5 7 8 10
+    0x056B,   // locrian      0 1 3 5 6 8 10
+    0x09AD,   // harm minor   0 2 3 5 7 8 11
+    0x0295,   // penta major  0 2 4 7 9
+    0x04A9,   // penta minor  0 3 5 7 10
+    0x04E9,   // blues        0 3 5 6 7 10
+    0x018D,   // hirajoshi    0 2 3 7 8
+    0x04A3,   // in sen       0 1 5 7 10
+    0x0555,   // whole tone   0 2 4 6 8 10
+};
+
+const char *act_name[ACT_COUNT] = {
+    "---", "TRIGGER", "HOLD", "OCT +", "OCT -", "DETUNE +", "DETUNE -",
+    "DUTY 1", "DUTY 2", "CH1 ON/OFF", "CH2 ON/OFF", "CH3 ON/OFF", "CH4 ON/OFF",
+    "ORNMNT +", "ORNMNT -", "SEMI +", "SEMI -"
+};
+
+const char *drum_src_name[DRUM_SRC_COUNT] = { "AUD 1", "AUD 2", "CV 1", "CV 2", "PU 2", "SWITCH" };
+const char *drum_name[DRUM_PRESETS] = {
+    "OFF", "KICK", "SNARE", "CL HAT", "OP HAT", "TOM HI", "TOM LO", "RIM", "CLAP"
+};
+
+// A drum voice. `noise` picks which PSG channel it lands on: the noise generator for anything
+// with a hiss, channel 1 for anything with a pitch. Pitched drums fall by `sweep` semitones over
+// their decay, which is the whole trick behind a PSG kick.
+typedef struct {
+    uint8_t noise;      // 1 = channel 4, 0 = channel 1
+    uint8_t note;       // starting MIDI note (pitched) or noise shift (noise)
+    uint8_t sweep;      // semitones of downward pitch sweep across the decay
+    uint8_t dec;        // ENV_MS index
+    uint8_t level;      // 0..15
+    uint8_t width;      // noise width: 1 = 7-bit, metallic
+} DrumVoice;
+
+static const DrumVoice DRUM[DRUM_PRESETS] = {
+    { 0,  0,  0,  0,  0, 0 },    // OFF
+    { 0, 45, 24,  5, 15, 0 },    // KICK    low, fast fall
+    { 1,  4,  0,  6, 13, 0 },    // SNARE   mid noise
+    { 1,  2,  0,  2, 10, 1 },    // CL HAT  short metallic
+    { 1,  2,  0,  7, 10, 1 },    // OP HAT  same, long
+    { 0, 62, 10,  7, 13, 0 },    // TOM HI
+    { 0, 50, 10,  8, 13, 0 },    // TOM LO
+    { 1,  0,  0,  1, 12, 1 },    // RIM     very short, very bright
+    { 1,  5,  0,  4, 12, 0 },    // CLAP
+};
 
 Patch g_patch;
 
 int32_t  g_pitchQ8 = 60 << 8;
+int32_t  g_chPitch[4] = { 60 << 8, 60 << 8, 60 << 8, 60 << 8 };
 uint8_t  g_note    = 60;
-uint16_t g_env     = 0;
-uint8_t  g_noteOn  = 0;
-uint8_t  g_latch   = 0;
-uint8_t  g_chLevel[4] = { 0, 0, 0, 0 };
+uint8_t  g_hold    = 0;
+uint16_t g_chEnv[4]     = { 0, 0, 0, 0 };
+uint8_t  g_chLevel[4]   = { 0, 0, 0, 0 };
+uint8_t  g_chNoteOn[4]  = { 0, 0, 0, 0 };
+uint8_t  g_chOrnStep[4] = { 0, 0, 0, 0 };
+uint8_t  g_anyNoteOn   = 0;
+uint8_t  g_btnTrigHeld = 0;
+uint8_t  g_drumHit[DRUM_SRC_COUNT] = { 0, 0, 0, 0, 0, 0 };
 
-uint16_t g_btn = 0, g_btnEdge = 0, g_btnRep = 0, g_btnStep = 0;
+uint16_t g_btn = 0;
+static uint16_t g_btnEdge = 0, g_btnRep = 0, g_btnStep = 0;
 volatile uint16_t g_btnEdgeLatch = 0;
 volatile uint16_t g_btnStepLatch = 0;
 uint8_t g_editMode = 0;
@@ -50,21 +129,25 @@ uint16_t synth_take_steps(void) { uint16_t v = g_btnStepLatch; g_btnStepLatch = 
 #define ENV_DEC  2
 #define ENV_SUS  3
 #define ENV_REL  4
-static uint8_t g_envState = ENV_IDLE;
+static uint8_t g_envState[4] = { ENV_IDLE, ENV_IDLE, ENV_IDLE, ENV_IDLE };
 
-// Increment per control tick for a full 0..65535 traverse. Index 0 is instantaneous; index 15
-// is about a minute at the 1 kHz control rate, which is long enough to be useful as a drone
-// swell rather than merely being the end of the table.
+// Envelope stage times, and the per-tick increment that realises them at the 1 kHz control rate
+// (inc = 65535 / milliseconds). Spread over what you would actually dial rather than the plain
+// power-of-two ladder this started as, which crammed everything useful into four indices.
+const uint16_t ENV_MS[16] = {
+    0, 5, 10, 20, 35, 60, 100, 160, 250, 400, 650, 1000, 1600, 2500, 4000, 6000
+};
 static const uint16_t ENV_INC[16] = {
-    65535, 16384, 8192, 4096, 2048, 1024, 512, 256,
-      128,    64,   32,   16,    8,    4,   2,   1
+    65535, 13107, 6554, 3277, 1872, 1092, 655, 410,
+      262,   164,  101,   66,   41,   26,  16,  11
 };
 
-// ---- integer divide -----------------------------------------------------------------------
-// We link -nostdlib, so libgcc is absent: a divide by a VARIABLE would be an undefined
-// reference to __aeabi_uidiv rather than merely slow code. (Divides by a compile-time constant
-// are fine — GCC turns those into a multiply and shift, which is why dec32's /10 works.)
-// Called only when the CAL page changes cvScale, so the shift-subtract cost is irrelevant.
+// Ornament step period in control ticks. Slow to fast.
+static const uint16_t ORN_RATE[8] = { 250, 167, 125, 84, 63, 42, 31, 21 };
+
+// ---- integer divide ---------------------------------------------------------------------
+// We link -nostdlib, so libgcc is absent: a divide by a VARIABLE is an undefined reference at
+// LINK time rather than merely slow code. Divides by compile-time constants are fine.
 static uint32_t udiv32(uint32_t n, uint32_t d)
 {
     if (d == 0) return 0;
@@ -76,9 +159,6 @@ static uint32_t udiv32(uint32_t n, uint32_t d)
     return q;
 }
 
-// Reciprocal of cvScale in Q12, so semitones = (counts * recip) >> 12 with no runtime divide.
-// Q12 rather than Q16 on purpose: at full scale that is 2048 * 36900, which stays inside
-// int32 with room to spare.
 static int32_t g_cvRecip = 0;
 static int16_t g_cvRecipFor = 0;
 
@@ -87,63 +167,136 @@ static void refresh_cv_recip(void)
     if (g_patch.cvScale == g_cvRecipFor) return;
     g_cvRecipFor = g_patch.cvScale;
     int32_t s = g_patch.cvScale;
-    // Floor of 64 (4 ADC counts per semitone) is an OVERFLOW guard, not a taste one: recip is
-    // (4096 << 12) / cvScale, and semiQ8 multiplies it by up to 4095 counts. At 64 that peaks
-    // near 1.07e9, comfortably inside int32; at 32 it would reach 2.147e9 and sit one step
-    // from wrapping. ui.c clamps the CAL field to the same floor.
+    // Floor of 64 is an OVERFLOW guard: recip is (4096 << 12) / cvScale and the pitch maths
+    // multiplies it by up to 4095 counts. At 64 that peaks near 1.07e9, inside int32.
     if (s < 64) s = 64;
     g_cvRecip = (int32_t)udiv32(4096u << 12, (uint32_t)s);
 }
 
-void synth_init(void)
+void synth_patch_applied(void) { g_cvRecipFor = 0; refresh_cv_recip(); }
+
+static int32_t clampi(int32_t v, int32_t lo, int32_t hi)
+{
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+
+int synth_patch_bytes(void) { return (int)sizeof(Patch); }
+
+int synth_patch_valid(const Patch *p)
+{
+    return p->magic == PATCH_MAGIC && p->version == PATCH_VERSION;
+}
+
+// ---- the factory patch ----------------------------------------------------------------------
+void synth_default_patch(void)
 {
     Patch *p = &g_patch;
 
-    p->chEnable   = 0x1;                      // channel 1 only: one clean voice to start
+    for (unsigned i = 0; i < sizeof(Patch); i++) ((uint8_t *)p)[i] = 0;
+    p->magic   = PATCH_MAGIC;
+    p->version = PATCH_VERSION;
+
+    for (int c = 0; c < 4; c++) {
+        Channel *ch = &p->ch[c];
+        ch->pan   = (c == 0) ? PAN_BOTH : PAN_OFF;   // one clean voice to start
+        ch->level = 15;
+        ch->semi  = 0;
+        ch->atk   = 0;
+        ch->dec   = 6;
+        ch->sus   = 12;
+        ch->rel   = 5;
+        ch->glide = 0;
+        ch->trig  = (1u << TRIG_PU2) | (1u << TRIG_SW) | (1u << TRIG_BTN);
+        ch->orn   = ORN_OFF;
+    }
+
     p->duty[0]    = PSG_DUTY_50;
     p->duty[1]    = PSG_DUTY_25;
-    p->detune     = 4;                        // a quarter semitone of thickness when ch2 is on
+    p->detune     = 4;
     p->waveSel    = 0;
-    p->waveVol    = PSG_WAVE_100;
     p->noiseDiv   = 3;
     p->noiseShift = 4;
     p->noiseWidth = 0;
-    p->noiseLevel = 8;
-    p->atk        = 0;
-    p->dec        = 6;
-    p->sus        = 12;
-    p->rel        = 5;
     p->retrig     = 1;
     p->sweepTime  = 0;
     p->sweepDir   = 0;
     p->sweepShift = 0;
-    p->glide      = 0;
     p->octave     = 0;
     p->masterL    = 7;
     p->masterR    = 7;
     p->ratio      = 2;                        // 100%
-    p->baseNote   = 36;                       // 0 V = C2, the classic 1V/oct convention
+    p->baseNote   = 36;                       // 0 V = C2
+    p->tuneCents  = 0;
+    p->key        = 0;
+    p->scale      = 0;                        // chromatic: quantiser off
+    p->drumMode   = 0;
+    p->drumThresh = 6;
 
-    // Workshop CV inputs span about +-6 V over 4096 counts: 341 counts/V, 28.44 per semitone.
-    // Q4 of 28.44 is 455. There is no factory calibration for the CV INPUTS (ComputerCard
-    // calibrates the outputs only), so this is a starting estimate to be trimmed on the CAL
-    // page — which is exactly why that page exists.
-    p->cvScale    = 455;
-    p->cvOffset   = 0;
+    // Workshop CV inputs span about +-6 V over 4096 counts: 341 counts/V, 28.44 per semitone,
+    // and Q4 of 28.44 is 455. There is no factory calibration for the CV INPUTS, so this is a
+    // starting estimate to be trimmed on the CAL page.
+    p->cvScale  = 455;
+    p->cvOffset = 0;
 
-    p->mod[SRC_CV1].dest   = DEST_DUTY;   p->mod[SRC_CV1].depth  = 40;
-    p->mod[SRC_CV2].dest   = DEST_PITCH;  p->mod[SRC_CV2].depth  = 32;   // unity 1V/oct
-    p->mod[SRC_AUD1].dest  = DEST_DETUNE; p->mod[SRC_AUD1].depth = 32;
-    p->mod[SRC_AUD2].dest  = DEST_NOISE;  p->mod[SRC_AUD2].depth = 40;
+    for (int s = 0; s < SRC_COUNT; s++) { p->mod[s].dest = DEST_NONE; p->mod[s].depth = 0;
+                                          p->mod[s].chMask = 0xF; }
+    p->mod[SRC_CV1].dest  = DEST_DUTY;   p->mod[SRC_CV1].depth  = 40; p->mod[SRC_CV1].chMask = 0x3;
+    p->mod[SRC_CV2].dest  = DEST_PITCH;  p->mod[SRC_CV2].depth  = 32; p->mod[SRC_CV2].chMask = 0xF;
+    p->mod[SRC_AUD1].dest = DEST_DETUNE; p->mod[SRC_AUD1].depth = 32; p->mod[SRC_AUD1].chMask = 0x2;
+    p->mod[SRC_AUD2].dest = DEST_LEVEL;  p->mod[SRC_AUD2].depth = 40; p->mod[SRC_AUD2].chMask = 0x8;
 
-    refresh_cv_recip();
+    // Preset ornaments, editable like any other. Two arpeggios, an octave figure, a trill, a
+    // rising octave run and a wide fifth-and-octave sweep.
+    static const int8_t seed[ORN_SLOTS][ORN_STEPS] = {
+        { 0, 4, 7, 12, 7, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },       // major arp
+        { 0, 3, 7, 12, 7, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },       // minor arp
+        { 0, 12, 0, 12, 0, 12, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0 },    // octave jump
+        { 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },        // trill
+        { 0, 12, 24, 12, 0, -12, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0 },  // octave run
+        { 0, 7, 12, 19, 24, 19, 12, 7, 0, 0, 0, 0, 0, 0, 0, 0 },   // fifths and octaves
+    };
+    static const uint8_t seedLen[ORN_SLOTS]  = { 6, 6, 4, 4, 8, 8 };
+    static const uint8_t seedRate[ORN_SLOTS] = { 4, 4, 5, 6, 4, 3 };
+    for (int o = 0; o < ORN_SLOTS; o++) {
+        p->orn[o].len  = seedLen[o];
+        p->orn[o].rate = seedRate[o];
+        p->orn[o].mode = 0;
+        for (int i = 0; i < ORN_STEPS; i++) p->orn[o].step[i] = seed[o][i];
+    }
+
+    p->btnAct[0] = ACT_TRIGGER;      // A
+    p->btnAct[1] = ACT_HOLD;         // B
+    p->btnAct[2] = ACT_DUTY2;        // L
+    p->btnAct[3] = ACT_DUTY1;        // R
+    p->btnAct[4] = ACT_OCT_UP;       // Up
+    p->btnAct[5] = ACT_OCT_DN;       // Down
+    p->btnAct[6] = ACT_DETUNE_DN;    // Left
+    p->btnAct[7] = ACT_DETUNE_UP;    // Right
+
+    // Somewhere to start rather than four empty grids.
+    p->userScale[0] = 0x0AB5;        // major
+    p->userScale[1] = 0x05AD;        // minor
+    p->userScale[2] = 0x0295;        // pentatonic
+    p->userScale[3] = 0x0FFF;        // chromatic
+
+    p->drumMap[DRUM_SRC_AUD1] = 1;   // kick
+    p->drumMap[DRUM_SRC_AUD2] = 2;   // snare
+    p->drumMap[DRUM_SRC_CV1]  = 3;   // closed hat
+    p->drumMap[DRUM_SRC_CV2]  = 5;   // tom hi
+    p->drumMap[DRUM_SRC_PU2]  = 1;   // kick
+    p->drumMap[DRUM_SRC_SW]   = 2;   // snare
+}
+
+void synth_init(void)
+{
+    synth_default_patch();
+    synth_patch_applied();
     psg_init();
 
-    // Free-running control clock: 16.78 MHz / 1024 = 16384 Hz, so 16 ticks is 1.024 kHz.
-    // Paced off a timer rather than VBlank because 60 Hz modulation on a CV-driven voice is
-    // audibly steppy.
+    // Free-running control clock: 16.78 MHz / 1024 = 16384 Hz, so 16 ticks is 1.024 kHz. Paced
+    // off a timer rather than VBlank because 60 Hz modulation on a CV-driven voice is steppy.
     REG_TM0CNT_L = 0;
-    REG_TM0CNT_H = 0x0083;                    // prescaler 1024, enable
+    REG_TM0CNT_H = 0x0083;
 }
 
 // ---- buttons ----
@@ -159,9 +312,9 @@ static void scan_buttons(void)
     for (int b = 0; b < 10; b++) {
         uint16_t m = (uint16_t)(1u << b);
         if (!(now & m)) { g_repTimer[b] = 0; continue; }
-        if (g_btnEdge & m) { g_repTimer[b] = 300; continue; }   // 300 ms before repeating
+        if (g_btnEdge & m) { g_repTimer[b] = 300; continue; }
         if (g_repTimer[b]) {
-            if (--g_repTimer[b] == 0) { g_btnRep |= m; g_repTimer[b] = 40; }   // 25 Hz
+            if (--g_repTimer[b] == 0) { g_btnRep |= m; g_repTimer[b] = 40; }
         }
     }
 
@@ -173,15 +326,7 @@ static void scan_buttons(void)
     link_set_buttons(now);
 }
 
-// ---- helpers ----
-static int32_t clampi(int32_t v, int32_t lo, int32_t hi)
-{
-    return v < lo ? lo : (v > hi ? hi : v);
-}
-
-// Period register for a Q8 MIDI-note pitch. Linear interpolation BETWEEN table entries is
-// exact rather than approximate here: the register is an affine function of 1/f, so
-// interpolating the register is interpolating the period.
+// ---- pitch ----------------------------------------------------------------------------------
 static uint16_t period_for(int32_t pitchQ8, int semitoneShift)
 {
     int32_t p = pitchQ8 + ((int32_t)semitoneShift << 8);
@@ -194,222 +339,484 @@ static uint16_t period_for(int32_t pitchQ8, int semitoneShift)
     return (uint16_t)(a + (((b - a) * frac) >> 8));
 }
 
-// ---- the control tick ---------------------------------------------------------------------
+static uint16_t scale_mask_for(int idx)
+{
+    if (idx < SCALE_BUILTIN) return SCALE_MASK[idx];
+    uint16_t m = g_patch.userScale[(idx - SCALE_BUILTIN) & 3];
+    return m ? (uint16_t)(m & 0x0FFF) : 0x0FFF;   // an empty user scale would silence everything
+}
+
+// Snap a note to the NEAREST degree of the current key and scale, not the one below it. Rounding
+// down makes a slow upward CV sweep hang on each degree until it is a full step past — the note
+// you hear lags the voltage you can see. Nearest splits the difference and tracks properly.
+static int32_t quantise(int32_t note, int scaleIdx, int key)
+{
+    if (scaleIdx == 0) return note;
+
+    uint16_t mask = scale_mask_for(scaleIdx);
+    int32_t  rel  = note - key;
+    int32_t  oct  = rel / 12;                  // constant divisor
+    int32_t  deg  = rel - oct * 12;
+    if (deg < 0) { deg += 12; oct--; }
+
+    for (int d = 0; d < 12; d++) {
+        int32_t up = deg + d, dn = deg - d;
+        int32_t k, adj;
+        // Down first on a tie, so a note exactly between two degrees resolves consistently.
+        k = dn; adj = 0;
+        if (k < 0) { k += 12; adj = -12; }
+        if (mask & (1u << k)) return key + oct * 12 + k + adj;
+        k = up; adj = 0;
+        if (k > 11) { k -= 12; adj = 12; }
+        if (mask & (1u << k)) return key + oct * 12 + k + adj;
+    }
+    return note;
+}
+
+// ---- drums ----------------------------------------------------------------------------------
+// State for the two channels the drum engine can borrow.
+static int32_t  g_drumPitch = 0;     // Q8, channel 1
+static int32_t  g_drumFall  = 0;     // Q8 per tick
+static uint16_t g_drumEnv[2] = { 0, 0 };
+static uint8_t  g_drumDec[2] = { 0, 0 };
+static uint8_t  g_drumLvl[2] = { 0, 0 };
+static uint8_t  g_drumShift  = 0;
+static uint8_t  g_drumWidth  = 0;
+
+static void drum_fire(int preset)
+{
+    const DrumVoice *d = &DRUM[preset % DRUM_PRESETS];
+    int slot = d->noise ? 1 : 0;
+
+    g_drumEnv[slot] = 65535;
+    g_drumDec[slot] = d->dec;
+    g_drumLvl[slot] = d->level;
+
+    if (d->noise) {
+        g_drumShift = d->note;
+        g_drumWidth = d->width;
+    } else {
+        g_drumPitch = (int32_t)d->note << 8;
+        // Fall the whole sweep over roughly the decay time, in control ticks.
+        uint16_t ms = ENV_MS[d->dec & 15];
+        if (ms < 5) ms = 5;
+        // udiv32, not '/': ms is a variable, and -nostdlib turns a variable divide into an
+        // undefined __aeabi_idiv at link time. Fires once per drum hit, so the cost is nothing.
+        g_drumFall = (int32_t)udiv32((uint32_t)d->sweep << 8, ms);
+        if (g_drumFall < 1) g_drumFall = 1;
+    }
+}
+
+// ---- the control tick -------------------------------------------------------------------------
 static void synth_tick(void)
 {
     Patch *p = &g_patch;
     scan_buttons();
     refresh_cv_recip();
 
-    // ---- PLAY-mode performance controls -------------------------------------------------
-    // While the editor is open the D-pad belongs to it, so these stand down entirely rather
-    // than both acting on the same press.
-    if (!g_editMode) {
-        if (g_btnStep & KEY_UP)    p->octave = (int8_t)clampi(p->octave + 1, -3, 3);
-        if (g_btnStep & KEY_DOWN)  p->octave = (int8_t)clampi(p->octave - 1, -3, 3);
-        if (g_btnStep & KEY_RIGHT) p->detune = (int8_t)clampi(p->detune + 1, -64, 63);
-        if (g_btnStep & KEY_LEFT)  p->detune = (int8_t)clampi(p->detune - 1, -64, 63);
-        if (g_btnEdge & KEY_R)     p->duty[0] = (uint8_t)((p->duty[0] + 1) & 3);
-        if (g_btnEdge & KEY_L)     p->duty[1] = (uint8_t)((p->duty[1] + 1) & 3);
-        if (g_btnEdge & KEY_B)     g_latch = (uint8_t)!g_latch;
-    }
+    // ---- mapped button actions --------------------------------------------------------------
+    // IN THE EDITOR NO BUTTON CARRIES ITS PERFORMANCE MEANING. Every key belongs to the editor
+    // while a menu is open. Performance meanings belong to the performance screen.
+    int btnTrigLevel = 0, btnTrigEdge = 0;
+    for (int b = 0; b < BTN_SLOTS && !g_editMode; b++) {
+        uint8_t  act = p->btnAct[b];
+        uint16_t bit = BTN_BIT[b];
+        int      lvl = (g_btn & bit) != 0;
+        int      edg = (g_btnEdge & bit) != 0;
+        int      stp = (g_btnStep & bit) != 0;
 
-    // ---- modulation matrix ----------------------------------------------------------------
-    int32_t modPitchQ8 = 0, modDuty = 0, modDetune = 0, modNoise = 0;
-    int32_t modWave = 0, modGlide = 0, modDecay = 0, modSweep = 0;
+        if (act == ACT_TRIGGER) { btnTrigLevel |= lvl; btnTrigEdge |= edg; continue; }
+        if (act == ACT_HOLD)    { if (edg) g_hold = (uint8_t)!g_hold; continue; }
+
+        switch (act) {
+        case ACT_OCT_UP:    if (stp) p->octave = (int8_t)clampi(p->octave + 1, -3, 3); break;
+        case ACT_OCT_DN:    if (stp) p->octave = (int8_t)clampi(p->octave - 1, -3, 3); break;
+        case ACT_DETUNE_UP: if (stp) p->detune = (int8_t)clampi(p->detune + 1, -64, 63); break;
+        case ACT_DETUNE_DN: if (stp) p->detune = (int8_t)clampi(p->detune - 1, -64, 63); break;
+        case ACT_DUTY1:     if (edg) p->duty[0] = (uint8_t)((p->duty[0] + 1) & 3); break;
+        case ACT_DUTY2:     if (edg) p->duty[1] = (uint8_t)((p->duty[1] + 1) & 3); break;
+        case ACT_CH1: case ACT_CH2: case ACT_CH3: case ACT_CH4: {
+            int c = act - ACT_CH1;
+            if (edg) p->ch[c].pan = (uint8_t)(p->ch[c].pan ? PAN_OFF : PAN_BOTH);
+            break;
+        }
+        case ACT_ORN_UP: case ACT_ORN_DN: {
+            if (!stp) break;
+            int d = (act == ACT_ORN_UP) ? 1 : -1;
+            for (int c = 0; c < 4; c++)
+                p->ch[c].orn = (uint8_t)clampi(p->ch[c].orn + d, ORN_OFF, ORN_CV);
+            break;
+        }
+        case ACT_SEMI_UP: case ACT_SEMI_DN: {
+            if (!stp) break;
+            int d = (act == ACT_SEMI_UP) ? 1 : -1;
+            for (int c = 0; c < 4; c++)
+                p->ch[c].semi = (int8_t)clampi(p->ch[c].semi + d, -24, 24);
+            break;
+        }
+        default: break;
+        }
+    }
+    g_btnTrigHeld = (uint8_t)(btnTrigLevel != 0);
+
+    // ---- modulation matrix ------------------------------------------------------------------
+    // Per-voice destinations accumulate into an array indexed by channel and are gated by the
+    // slot's channel mask; the rest address single pieces of hardware and stay global.
+    int32_t modPitch[4] = { 0, 0, 0, 0 };
+    int32_t modLevel[4] = { 0, 0, 0, 0 };
+    int32_t modDuty[4]  = { 0, 0, 0, 0 };
+    int32_t modGlide[4] = { 0, 0, 0, 0 };
+    int32_t modDecay[4] = { 0, 0, 0, 0 };
+    uint8_t ornForce[4] = { 0, 0, 0, 0 };     // ornament slot forced on by a mapping
+    int32_t modDetune = 0, modSweep = 0, modNPitch = 0, modOrnRate = 0;
+    int32_t modScale = 0, modKey = 0;
 
     for (int s = 0; s < SRC_COUNT; s++) {
         int dest = p->mod[s].dest;
         if (dest == DEST_NONE) continue;
         int32_t depth = p->mod[s].depth;
-        int32_t raw   = (int32_t)g_in[s] - 2048;      // -2048..2047, 0 = 0 V
+        uint8_t mask  = p->mod[s].chMask;
+
+        // The four jacks are bipolar around 0 V; the three knobs are unipolar and are centred
+        // here so one depth control means the same thing for both.
+        int32_t raw = (s < 4) ? ((int32_t)g_in[s] - 2048)
+                              : ((int32_t)g_knob[s - 4] - 2048);
 
         if (dest == DEST_PITCH) {
-            // Depth 32 is unity: one volt in gives exactly one octave. The CV -> semitone
-            // conversion uses the CAL page's scale, so tuning is trimmed in one place.
             int32_t semiQ8 = ((raw - p->cvOffset) * g_cvRecip) >> 12;
-            modPitchQ8 += (semiQ8 * depth) >> 5;
+            int32_t v = (semiQ8 * depth) >> 5;      // depth 32 is unity 1V/oct
+            for (int c = 0; c < 4; c++) if (mask & (1u << c)) modPitch[c] += v;
             continue;
         }
 
-        // Everything else: normalise to roughly -128..127 before scaling by depth.
+        if (dest == DEST_ORN) {
+            // DEPTH IS NOT A DEPTH HERE: it names the ornament SLOT, and the source is a plain
+            // switch — above halfway it is on. There is no "forty per cent of an arpeggio", so a
+            // continuous depth would have been a control with nothing to say.
+            if (raw > 0) {
+                uint8_t slot = (uint8_t)clampi(depth, 1, ORN_SLOTS);
+                for (int c = 0; c < 4; c++) if (mask & (1u << c)) ornForce[c] = slot;
+            }
+            continue;
+        }
+
         int32_t v = (raw * depth) >> 11;
         switch (dest) {
-        case DEST_DUTY:   modDuty   += v; break;
-        case DEST_DETUNE: modDetune += v; break;
-        case DEST_NOISE:  modNoise  += v; break;
-        case DEST_WAVE:   modWave   += v; break;
-        case DEST_GLIDE:  modGlide  += v; break;
-        case DEST_DECAY:  modDecay  += v; break;
-        case DEST_SWEEP:  modSweep  += v; break;
+        case DEST_LEVEL: for (int c = 0; c < 4; c++) if (mask & (1u << c)) modLevel[c] += v; break;
+        case DEST_DUTY:  for (int c = 0; c < 4; c++) if (mask & (1u << c)) modDuty[c]  += v; break;
+        case DEST_GLIDE: for (int c = 0; c < 4; c++) if (mask & (1u << c)) modGlide[c] += v; break;
+        case DEST_DECAY: for (int c = 0; c < 4; c++) if (mask & (1u << c)) modDecay[c] += v; break;
+        case DEST_DETUNE:  modDetune  += v; break;
+        case DEST_SWEEP:   modSweep   += v; break;
+        case DEST_NPITCH:  modNPitch  += v; break;
+        case DEST_ORNRATE: modOrnRate += v; break;
+        case DEST_SCALE:   modScale   += v; break;
+        case DEST_KEY:     modKey     += v; break;
         default: break;
         }
     }
 
-    // ---- pitch ----------------------------------------------------------------------------
-    int32_t target = ((int32_t)p->baseNote << 8)
-                   + ((int32_t)p->octave * 12 << 8)
-                   + modPitchQ8;
-    target = clampi(target, (int32_t)NOTE_MIN << 8, (int32_t)NOTE_MAX << 8);
+    // Scale and key are musical settings a knob can sweep, so they are resolved here rather than
+    // read straight from the patch.
+    int scaleIdx = (int)clampi((int32_t)p->scale + (modScale >> 4), 0, SCALE_COUNT - 1);
+    int keyIdx   = (int)clampi((int32_t)p->key   + (modKey   >> 4), 0, 11);
 
-    // Glide doubles as the anti-zipper filter. Even at the shortest setting the one-pole
-    // smooths the 12-bit CV's 3.5-cent steps into continuous motion; longer settings are
-    // portamento. This is why a 12-bit pitch word sounds like a voltage and not like a
-    // staircase.
-    int32_t glide = clampi((int32_t)p->glide + (modGlide >> 4), 0, 15);
-    if (glide == 0) {
-        g_pitchQ8 = target;
-    } else {
-        g_pitchQ8 += (target - g_pitchQ8) >> glide;
-        if (target != g_pitchQ8 && ((target - g_pitchQ8) >> glide) == 0) g_pitchQ8 = target;
-    }
-
+    // ---- pitch ---------------------------------------------------------------------------------
+    int32_t base = ((int32_t)p->baseNote << 8)
+                 + ((int32_t)p->octave * 12 << 8)
+                 + (((int32_t)p->tuneCents * 256) / 100);    // master tuning, constant divisor
+    g_pitchQ8 = clampi(base + modPitch[0], (int32_t)NOTE_MIN << 8, (int32_t)NOTE_MAX << 8);
     uint8_t note = (uint8_t)clampi((g_pitchQ8 + 128) >> 8, 0, 127);
+    if (scaleIdx != 0) note = (uint8_t)clampi(quantise(note, scaleIdx, keyIdx), 0, 127);
+    g_note = note;
 
-    // ---- gate and envelope ----------------------------------------------------------------
-    // Edge-driven, not level-driven: the sticky edge bit means a trigger far shorter than one
-    // poll still fires a note.
-    int gateOn = g_gate || (g_btn & KEY_A) || g_latch;
-    int edge   = 0;
+    // ---- trigger sources ------------------------------------------------------------------------
     static uint32_t seenEdges = 0;
-    if (g_gateEdges != seenEdges) { seenEdges++; edge = 1; }
-    if (g_btnEdge & KEY_A)   { edge = 1; }
-    if ((g_btnEdge & KEY_B) && g_latch) { edge = 1; }
+    static uint8_t  swPrev = 1;
 
-    if (edge) {
-        g_envState = (p->atk == 0) ? ENV_DEC : ENV_ATK;
-        if (p->atk == 0) g_env = 65535;
-        else if (p->retrig) g_env = 0;
-        g_noteOn = 1;
-        // The channels are NOT triggered here. See the trigger block at the end of this
-        // function: the envelope volume has to be written first.
-    } else if (!gateOn && g_noteOn && g_envState != ENV_REL) {
-        g_envState = ENV_REL;
+    int trigLevel[TRIG_COUNT], trigEdge[TRIG_COUNT];
+    trigLevel[TRIG_PU2] = g_gate;
+    trigEdge[TRIG_PU2]  = 0;
+    if (g_gateEdges != seenEdges) { seenEdges++; trigEdge[TRIG_PU2] = 1; }
+
+    trigLevel[TRIG_SW] = (g_switch == 0);
+    trigEdge[TRIG_SW]  = (g_switch == 0 && swPrev != 0);
+    swPrev = g_switch;
+
+    trigLevel[TRIG_BTN] = btnTrigLevel;
+    trigEdge[TRIG_BTN]  = btnTrigEdge;
+
+    // HOLD is a LATCHING trigger source: switching it on fires once and sustains, switching it
+    // off releases. It never re-fires on its own.
+    static uint8_t holdPrev = 0;
+    int holdEdge = (g_hold && !holdPrev);
+    holdPrev = g_hold;
+
+    // ---- drums ------------------------------------------------------------------------------
+    // Any input going HIGH is a pad. The threshold is deliberately generous: these are meant to
+    // be driven by triggers, gates and loud audio, not by a precise voltage.
+    if (p->drumMode) {
+        static uint8_t hi[DRUM_SRC_COUNT] = { 0, 0, 0, 0, 0, 0 };
+        int32_t thr = 2048 + (int32_t)p->drumThresh * 96;
+
+        int lvl[DRUM_SRC_COUNT];
+        lvl[DRUM_SRC_AUD1] = (int32_t)g_in[SRC_AUD1] > thr;
+        lvl[DRUM_SRC_AUD2] = (int32_t)g_in[SRC_AUD2] > thr;
+        lvl[DRUM_SRC_CV1]  = (int32_t)g_in[SRC_CV1]  > thr;
+        lvl[DRUM_SRC_CV2]  = (int32_t)g_in[SRC_CV2]  > thr;
+        lvl[DRUM_SRC_PU2]  = g_gate;
+        lvl[DRUM_SRC_SW]   = (g_switch == 0);
+
+        for (int i = 0; i < DRUM_SRC_COUNT; i++) {
+            if (lvl[i] && !hi[i] && p->drumMap[i]) {
+                drum_fire(p->drumMap[i]);
+                g_drumHit[i] = 60;                    // ~60 ms of indicator
+            }
+            hi[i] = (uint8_t)lvl[i];
+            if (g_drumHit[i]) g_drumHit[i]--;
+        }
+
+        for (int d = 0; d < 2; d++) {
+            if (!g_drumEnv[d]) continue;
+            int32_t e = (int32_t)g_drumEnv[d] - ENV_INC[g_drumDec[d] & 15];
+            g_drumEnv[d] = (uint16_t)(e < 0 ? 0 : e);
+        }
+        if (g_drumFall) {
+            g_drumPitch -= g_drumFall;
+            if (g_drumPitch < ((int32_t)NOTE_MIN << 8)) g_drumPitch = (int32_t)NOTE_MIN << 8;
+        }
     }
 
-    int32_t susLevel = (int32_t)p->sus * 4369;         // 0..15 -> 0..65535
-    int32_t decIx    = clampi((int32_t)p->dec + (modDecay >> 5), 0, 15);
+    // ---- per-channel envelopes ------------------------------------------------------------------
+    int chEdge[4] = { 0, 0, 0, 0 };
+    g_anyNoteOn = 0;
 
-    switch (g_envState) {
-    case ENV_ATK: {
-        int32_t e = (int32_t)g_env + ENV_INC[p->atk];
-        if (e >= 65535) { e = 65535; g_envState = ENV_DEC; }
-        g_env = (uint16_t)e;
-        break;
-    }
-    case ENV_DEC: {
-        int32_t e = (int32_t)g_env - ENV_INC[decIx];
-        if (e <= susLevel) { e = susLevel; g_envState = ENV_SUS; }
-        g_env = (uint16_t)e;
-        break;
-    }
-    case ENV_SUS:
-        g_env = (uint16_t)susLevel;
-        break;
-    case ENV_REL: {
-        int32_t e = (int32_t)g_env - ENV_INC[p->rel];
-        if (e <= 0) { e = 0; g_envState = ENV_IDLE; g_noteOn = 0; }
-        g_env = (uint16_t)e;
-        break;
-    }
-    default:
-        g_env = 0;
-        break;
+    for (int c = 0; c < 4; c++) {
+        Channel *ch = &p->ch[c];
+
+        int gateOn = ch->trig ? g_hold : 0;
+        int edge   = ch->trig ? holdEdge : 0;
+        for (int t = 0; t < TRIG_COUNT; t++) {
+            if (!(ch->trig & (1u << t))) continue;
+            gateOn |= trigLevel[t];
+            edge   |= trigEdge[t];
+        }
+
+        if (edge) {
+            g_envState[c] = (ch->atk == 0) ? ENV_DEC : ENV_ATK;
+            if (ch->atk == 0)   g_chEnv[c] = 65535;
+            else if (p->retrig) g_chEnv[c] = 0;
+            g_chNoteOn[c]  = 1;
+            g_chOrnStep[c] = 0;
+            chEdge[c] = 1;
+        } else if (!gateOn && g_chNoteOn[c] && g_envState[c] != ENV_REL) {
+            g_envState[c] = ENV_REL;
+        }
+
+        int32_t susLevel = (int32_t)ch->sus * 4369;
+        int32_t decIx    = clampi((int32_t)ch->dec + (modDecay[c] >> 5), 0, 15);
+
+        switch (g_envState[c]) {
+        case ENV_ATK: {
+            int32_t e = (int32_t)g_chEnv[c] + ENV_INC[ch->atk];
+            if (e >= 65535) { e = 65535; g_envState[c] = ENV_DEC; }
+            g_chEnv[c] = (uint16_t)e;
+            break;
+        }
+        case ENV_DEC: {
+            int32_t e = (int32_t)g_chEnv[c] - ENV_INC[decIx];
+            if (e <= susLevel) { e = susLevel; g_envState[c] = ENV_SUS; }
+            g_chEnv[c] = (uint16_t)e;
+            break;
+        }
+        case ENV_SUS: g_chEnv[c] = (uint16_t)susLevel; break;
+        case ENV_REL: {
+            int32_t e = (int32_t)g_chEnv[c] - ENV_INC[ch->rel];
+            if (e <= 0) { e = 0; g_envState[c] = ENV_IDLE; g_chNoteOn[c] = 0; }
+            g_chEnv[c] = (uint16_t)e;
+            break;
+        }
+        default: g_chEnv[c] = 0; break;
+        }
+
+        if (g_chNoteOn[c]) g_anyNoteOn = 1;
     }
 
-    uint8_t vol = (uint8_t)(g_env >> 12);              // 0..15
+    // ---- ornaments ------------------------------------------------------------------------------
+    static uint16_t ornCount[4] = { 0, 0, 0, 0 };
+    int32_t ornOffset[4] = { 0, 0, 0, 0 };
 
-    // Floor an ACTIVE note at 1 rather than 0. Volume 0 with direction 0 switches the DAC off,
-    // which would make a slow attack silent for ever: the trigger below is skipped while the
-    // volume is 0, and once the attack tick has passed nothing ever fires it again. Volume 1 is
-    // the quietest audible step anyway, so nothing is lost. Idle still reaches a true 0, which
-    // is what keeps a released note properly silent.
-    if (vol == 0 && g_envState != ENV_IDLE) vol = 1;
+    for (int c = 0; c < 4; c++) {
+        Channel *ch = &p->ch[c];
 
-    // ---- write the voice ------------------------------------------------------------------
-    int duty0 = (int)clampi((int32_t)p->duty[0] + (modDuty >> 6), 0, 3);
-    int duty1 = (int)clampi((int32_t)p->duty[1] + (modDuty >> 6), 0, 3);
+        // A mapping wins over the channel's own setting, which is what makes a knob or a gate
+        // able to switch an ornament in on top of whatever the patch says. ORN_CV means "only
+        // when something maps one to me".
+        int slot = ornForce[c];
+        if (!slot) {
+            if (ch->orn == ORN_OFF || ch->orn == ORN_CV) {
+                ornCount[c] = 0; g_chOrnStep[c] = 0; continue;
+            }
+            slot = ch->orn;
+        }
+
+        Ornament *o = &p->orn[(slot - 1) % ORN_SLOTS];
+        if (o->len == 0 || !g_chNoteOn[c]) { ornCount[c] = 0; g_chOrnStep[c] = 0; continue; }
+
+        int32_t rate = clampi((int32_t)o->rate + (modOrnRate >> 5), 0, 7);
+        if (++ornCount[c] >= ORN_RATE[rate]) {
+            ornCount[c] = 0;
+            uint8_t next = (uint8_t)(g_chOrnStep[c] + 1);
+            if (next >= o->len) next = o->mode ? (uint8_t)(o->len - 1) : 0;
+            g_chOrnStep[c] = next;
+        }
+        ornOffset[c] = o->step[g_chOrnStep[c] % ORN_STEPS];
+    }
+
+    // ---- per-voice pitch and portamento -----------------------------------------------------------
+    // The quantiser snaps the TARGET; portamento then slides to it, so a scale still glides.
     int detune = (int)clampi((int32_t)p->detune + (modDetune >> 2), -128, 127);
 
-    g_chLevel[0] = (p->chEnable & 0x1) ? vol : 0;
-    g_chLevel[1] = (p->chEnable & 0x2) ? vol : 0;
-    g_chLevel[2] = (p->chEnable & 0x4) ? vol : 0;
-    g_chLevel[3] = (p->chEnable & 0x8) ? (uint8_t)clampi((p->noiseLevel * vol) >> 4, 0, 15) : 0;
+    for (int c = 0; c < 4; c++) {
+        int32_t t = base + modPitch[c];
+        if (scaleIdx != 0) t = quantise((t + 128) >> 8, scaleIdx, keyIdx) << 8;
+        t += (int32_t)p->ch[c].semi << 8;
+        if (c == 1) t += (detune << 4);
+        t = clampi(t, (int32_t)NOTE_MIN << 8, (int32_t)NOTE_MAX << 8);
 
-    if (p->chEnable & 0x1) {
-        psg_sq_voice(PSG_CH1, (uint8_t)duty0, g_chLevel[0]);
-        psg_sq_period(PSG_CH1, period_for(g_pitchQ8, 0));
-    } else {
-        psg_sq_voice(PSG_CH1, (uint8_t)duty0, 0);
+        int32_t g = clampi((int32_t)p->ch[c].glide + (modGlide[c] >> 4), 0, 15);
+        if (g == 0) {
+            g_chPitch[c] = t;
+        } else {
+            int32_t step = (t - g_chPitch[c]) >> g;
+            if (step == 0) g_chPitch[c] = t;      // without this the one-pole stalls short for ever
+            else           g_chPitch[c] += step;
+        }
     }
 
-    if (p->chEnable & 0x2) {
-        psg_sq_voice(PSG_CH2, (uint8_t)duty1, g_chLevel[1]);
-        // Detune is in 1/16 semitone; the shift keeps it in the Q8 pitch domain.
-        psg_sq_period(PSG_CH2, period_for(g_pitchQ8 + (detune << 4), 0));
-    } else {
-        psg_sq_voice(PSG_CH2, (uint8_t)duty1, 0);
+    // ---- levels -----------------------------------------------------------------------------------
+    uint8_t maskL = 0, maskR = 0;
+    for (int c = 0; c < 4; c++) {
+        if (p->ch[c].pan & 1) maskL |= (uint8_t)(1u << c);
+        if (p->ch[c].pan & 2) maskR |= (uint8_t)(1u << c);
     }
 
-    if (p->chEnable & 0x4) {
-        int wv = (int)clampi((int32_t)p->waveVol + (modWave >> 6), 0, 3);
-        psg_wave_voice((uint8_t)(vol ? wv : PSG_WAVE_MUTE));
-        psg_wave_period(period_for(g_pitchQ8, 12));
-    } else {
-        psg_wave_voice(PSG_WAVE_MUTE);
+    for (int c = 0; c < 4; c++) {
+        uint8_t vol = (uint8_t)(g_chEnv[c] >> 12);
+        // Floor an ACTIVE note at 1: volume 0 with direction 0 switches the DAC off, and the
+        // trigger below is skipped while the volume is 0, so a slow attack would never sound.
+        if (vol == 0 && g_envState[c] != ENV_IDLE) vol = 1;
+
+        int32_t lv  = clampi((int32_t)p->ch[c].level + (modLevel[c] >> 4), 0, 15);
+        int32_t out = ((int32_t)vol * lv) / 15;              // constant divisor
+        if (vol && lv && out == 0) out = 1;
+        if (p->ch[c].pan == PAN_OFF || lv == 0) out = 0;
+        g_chLevel[c] = (uint8_t)out;
     }
 
-    if (p->chEnable & 0x8) {
-        int shift = (int)clampi((int32_t)p->noiseShift + (modNoise >> 5), 0, 13);
+    // ---- write the voice ----------------------------------------------------------------------------
+    int32_t pitch1 = g_chPitch[0] + ((int32_t)ornOffset[0] << 8);
+    int32_t pitch2 = g_chPitch[1] + ((int32_t)ornOffset[1] << 8);
+    int32_t pitch3 = g_chPitch[2] + ((int32_t)ornOffset[2] << 8);
+
+    int duty0 = (int)clampi((int32_t)p->duty[0] + (modDuty[0] >> 6), 0, 3);
+    int duty1 = (int)clampi((int32_t)p->duty[1] + (modDuty[1] >> 6), 0, 3);
+
+    // Drum mode borrows channels 1 and 4. Their melodic settings are left alone in the patch;
+    // they are simply not what is driving the hardware while drums are armed.
+    int drumCh1 = p->drumMode && g_drumEnv[0];
+    int drumCh4 = p->drumMode && g_drumEnv[1];
+
+    if (drumCh1) {
+        uint8_t v = (uint8_t)(((g_drumEnv[0] >> 12) * g_drumLvl[0]) / 15);
+        psg_sq_voice(PSG_CH1, PSG_DUTY_50, v);
+        psg_sq_period(PSG_CH1, period_for(g_drumPitch, 0));
+    } else {
+        psg_sq_voice(PSG_CH1, (uint8_t)duty0, p->drumMode ? 0 : g_chLevel[0]);
+        psg_sq_period(PSG_CH1, period_for(pitch1, 0));
+    }
+
+    psg_sq_voice(PSG_CH2, (uint8_t)duty1, g_chLevel[1]);
+    psg_sq_period(PSG_CH2, period_for(pitch2, 0));
+
+    {
+        uint8_t wv = (g_chLevel[2] == 0) ? PSG_WAVE_MUTE
+                   : (g_chLevel[2] <= 5) ? PSG_WAVE_25
+                   : (g_chLevel[2] <= 10) ? PSG_WAVE_50 : PSG_WAVE_100;
+        psg_wave_voice(wv);
+        psg_wave_period(period_for(pitch3, 12));       // wave is an octave down for the same n
+    }
+
+    if (drumCh4) {
+        uint8_t v = (uint8_t)(((g_drumEnv[1] >> 12) * g_drumLvl[1]) / 15);
+        psg_noise_set(p->noiseDiv, g_drumShift, g_drumWidth);
+        psg_noise_voice(v);
+    } else {
+        int shift = (int)clampi((int32_t)p->noiseShift + (modNPitch >> 5), 0, 13);
         psg_noise_set(p->noiseDiv, (uint8_t)shift, p->noiseWidth);
-        psg_noise_voice(g_chLevel[3]);
-    } else {
-        psg_noise_voice(0);
+        psg_noise_voice(p->drumMode ? 0 : g_chLevel[3]);
     }
 
-    // Channel 1 sweep, the one hardware modulator worth keeping — it runs faster than our
-    // control rate can.
     {
         int sw = (int)clampi((int32_t)p->sweepShift + (modSweep >> 6), 0, 7);
         psg_sq_sweep((uint8_t)sw, p->sweepDir, p->sweepTime);
     }
 
     psg_master(p->masterL, p->masterR, p->ratio);
-    psg_enable(p->chEnable, p->chEnable);
+    psg_enable((uint8_t)(maskL | (p->drumMode ? 0x9 : 0)),
+               (uint8_t)(maskR | (p->drumMode ? 0x9 : 0)));
 
-    // ---- trigger, AND IT HAS TO HAPPEN HERE, AFTER THE VOLUME WRITES ------------------------
-    // On this DMG-derived PSG, an envelope register holding volume 0 with direction 0 switches
-    // the channel's DAC off, and switching the DAC back on does NOT re-enable the channel: only
-    // a trigger does. Releasing a note leaves the envelope at 0, so triggering before writing
-    // the new volume would arm a channel whose DAC is still off. The first note would sound and
-    // every note after it would be silent. Volume first, trigger last, and it costs nothing.
-    //
-    // Newly enabled channels are triggered too. Without that, switching CH2 ON in the editor
-    // while a note is held does nothing audible until the next gate, which reads as a broken
-    // control rather than as correct behaviour.
+    // ---- trigger, AFTER the volume writes, AND on every volume CHANGE -----------------------------
+    // On this DMG-derived PSG the envelope register's volume field is only loaded into the
+    // channel BY A TRIGGER: writing it while the channel plays is ignored ("zombie mode"). Our
+    // envelopes are computed in software, so without this every attack and decay step would be
+    // silently discarded and a note would sound at whatever volume it happened to be triggered
+    // at. Only on a CHANGE, though — a retrigger resets the waveform phase, and doing it every
+    // tick would be a buzz rather than a note. Channel 3's level register applies immediately and
+    // is excluded.
     {
-        static uint8_t lastEnable = 0;
-        uint8_t fresh = (uint8_t)(p->chEnable & ~lastEnable);
-        lastEnable = p->chEnable;
+        static uint8_t lastOn = 0;
+        static uint8_t lastVol[4] = { 0, 0, 0, 0 };
+        static uint8_t lastDrum[2] = { 0, 0 };
+        uint8_t on    = (uint8_t)(maskL | maskR);
+        uint8_t fresh = (uint8_t)(on & ~lastOn);
+        lastOn = on;
 
-        uint8_t fire = (uint8_t)(edge ? p->chEnable : fresh);
-        if (fire && vol) {
-            if (fire & 0x1) psg_sq_trigger(PSG_CH1, period_for(g_pitchQ8, 0));
-            if (fire & 0x2) psg_sq_trigger(PSG_CH2, period_for(g_pitchQ8 + (detune << 4), 0));
-            if (fire & 0x4) psg_wave_trigger(period_for(g_pitchQ8, 12));
-            if (fire & 0x8) psg_noise_trigger();
+        for (int c = 0; c < 4; c++) {
+            uint8_t bit = (uint8_t)(1u << c);
+            if (p->drumMode && (c == 0 || c == 3)) continue;   // the drum engine triggers those
+            int volMoved = (c != 2) && (g_chLevel[c] != lastVol[c]);
+            lastVol[c] = g_chLevel[c];
+
+            if (!(chEdge[c] || (fresh & bit) || volMoved)) continue;
+            if (!g_chLevel[c]) continue;
+
+            switch (c) {
+            case 0: psg_sq_trigger(PSG_CH1, period_for(pitch1, 0)); break;
+            case 1: psg_sq_trigger(PSG_CH2, period_for(pitch2, 0)); break;
+            case 2: psg_wave_trigger(period_for(pitch3, 12)); break;
+            default: psg_noise_trigger(); break;
+            }
+        }
+
+        if (p->drumMode) {
+            uint8_t v0 = (uint8_t)(((g_drumEnv[0] >> 12) * g_drumLvl[0]) / 15);
+            uint8_t v1 = (uint8_t)(((g_drumEnv[1] >> 12) * g_drumLvl[1]) / 15);
+            if (v0 && v0 != lastDrum[0]) psg_sq_trigger(PSG_CH1, period_for(g_drumPitch, 0));
+            if (v1 && v1 != lastDrum[1]) psg_noise_trigger();
+            lastDrum[0] = v0;
+            lastDrum[1] = v1;
         }
     }
 
-    // ---- publish upstream ------------------------------------------------------------------
-    // Only when something actually changed, so the priority slot stays free for the next real
-    // event rather than being spent restating the same note a thousand times a second.
+    // ---- publish upstream ---------------------------------------------------------------------------
     {
         static uint8_t lastNote = 0xFF, lastGate = 0xFF;
-        uint8_t g = (uint8_t)(g_noteOn ? (vol ? vol : 1) : 0);
+        uint8_t loudest = 0;
+        for (int c = 0; c < 4; c++) if (g_chLevel[c] > loudest) loudest = g_chLevel[c];
+        uint8_t g = (uint8_t)(g_anyNoteOn ? (loudest ? loudest : 1) : 0);
         if (note != lastNote || g != lastGate) {
             lastNote = note; lastGate = g;
-            g_note = note;
             link_post_note(note, g);
         }
     }
@@ -422,13 +829,12 @@ void synth_update(void)
     if (!primed) { last = REG_TM0CNT_L; primed = 1; }
 
     uint16_t now = REG_TM0CNT_L;
-    // Bounded catch-up. If a long redraw ate several ticks we do NOT run them all: the
-    // envelope would lurch and the glide would jump. Running at most a few keeps time roughly
-    // honest without turning a slow frame into an audible artefact.
+    // Bounded catch-up: after a long stall we do NOT run every owed tick, or the envelope lurches
+    // and the glide jumps.
     int budget = 8;
     while ((uint16_t)(now - last) >= 16 && budget--) {
         last = (uint16_t)(last + 16);
         synth_tick();
     }
-    if ((uint16_t)(now - last) >= 16) last = now;   // gave up catching up; resync
+    if ((uint16_t)(now - last) >= 16) last = now;
 }

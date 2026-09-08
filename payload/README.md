@@ -6,14 +6,17 @@ builds with a bare `arm-none-eabi` toolchain targeting the GBA's ARM7TDMI (armv4
 
 ## What it does
 
-- Puts the LCD in mode 3 (240×160 bitmap) and draws the title **first**, before anything
-  else — so a blank screen means the image never ran, which is a completely different fault
-  from "ran but the link is quiet". Those two used to be indistinguishable from the bench.
+- Paints the screen **green in assembly**, in `crt0.s`, before the C runtime exists. That is the
+  boot proof: white means the image never ran, green means it ran and the C startup died, and the
+  play screen means a normal boot. Three states that were previously one identical white screen.
 - Acts as a **normal-mode 32-bit serial slave** (external clock from the RP2040), re-armed by
   the **serial interrupt** so the console is not deaf while it redraws.
-- Owns the instrument: pitch tracking from CV, a 4-source modulation matrix, a software ADSR,
-  and all four PSG channels (2 square, wave, noise).
-- Draws a play readout and a five-page editor (VOICE, ENVELOPE, SWEEP, MAP, CAL).
+- Owns the instrument: pitch tracking from CV, a 7-source modulation matrix with per-voice
+  routing, per-channel software ADSR, portamento, ornaments, a drum engine, and all four PSG
+  channels (2 square, wave, noise).
+- Draws a performance readout and an eleven-page editor.
+- Holds the patch, which the Workshop stores for it in flash — sixteen slots, transferred a byte
+  per link word.
 
 ## Files
 
@@ -22,8 +25,8 @@ builds with a bare `arm-none-eabi` toolchain targeting the GBA's ARM7TDMI (armv4
 | `main.c`        | Init and the main loop |
 | `link.c/.h`     | Serial slave, serial IRQ handler, protocol decode |
 | `psg.c/.h`      | PSG registers, wavetables |
-| `synth.c/.h`    | Voice: pitch, modulation matrix, envelope, performance controls |
-| `ui.c/.h`       | Play screen + five-page editor |
+| `synth.c/.h`    | Voice: pitch, modulation, envelopes, ornaments, drums, performance controls |
+| `ui.c/.h`       | Performance screen + eleven-page editor |
 | `gfx.c/.h`      | Mode-3 drawing and text |
 | `diag.c/.h`     | Link-characterisation screens (used by `linkrate`/`bandwidth`) |
 | `notes.h`       | **Generated** by `gen_notes.py`: PSG period register per MIDI note |
@@ -44,6 +47,13 @@ shift-subtract `udiv32` for the one place that genuinely needs it.
 **The IRQ stack is small.** The BIOS calls the serial handler in IRQ mode on the IRQ stack at
 `0x03007FA0`. `crt0.s` therefore puts the user stack at `0x03007E00` rather than the usual
 `0x03007F00`, giving the handler 416 bytes instead of 160. Keep the handler shallow.
+
+**`0xC0` is a BRANCH, not code.** GBATEK: the BIOS overwrites bytes `0xC4` (boot mode) and `0xC5`
+(slave ID) of the loaded image. Put instructions there and it corrupts them after loading, every
+time — see the long note at the top of `crt0.s` for how that cost a white screen.
+
+**No runtime division, and no implicit `memcpy` either.** Both are link errors here. A struct
+assignment compiles to `memcpy`; copy byte by byte.
 
 ## Building
 

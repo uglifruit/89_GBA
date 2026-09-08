@@ -22,6 +22,13 @@ enum class MultibootResult : uint8_t {
     BadPayload,     // payload pointer/size invalid
 };
 
+// Upload progress, 0..100, published while a transfer runs and reset to 0 between attempts.
+//
+// This exists because the payload has grown from 5 kB to 37 kB: at 100 kHz that is five and a
+// half seconds of solid transfer, which from the front panel is indistinguishable from a hang.
+// A progress reading turns "it is stuck" into "it is working, wait".
+extern volatile uint32_t gba_mb_progress;
+
 // Attempt one full multiboot upload of `rom` (`rom_size` bytes; the multiboot .mb image,
 // header included). Blocks on the SPI transport; intended to run on core 1. `rom_size`
 // is rounded up to a 16-byte boundary internally. Returns Ok only after a matching CRC.

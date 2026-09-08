@@ -31,6 +31,10 @@
 
 #include "gba_link.h"
 #include "gba_proto.h"
+#include "patch_store.h"
+#include "gba_multiboot.h"
+
+#include "pico/flash.h"
 #include "gba_payload.h"   // baked multiboot .mb image: gba_payload[] / gba_payload_size
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -53,15 +57,19 @@ public:
         // the EEPROM calibration is read by ComputerCard's own constructor, which has already
         // run by the time we get here, and the link sends its first HELLO within milliseconds
         // of being launched below.
-        gGba.caps = CVOutsCalibrated() ? GBA_CAP_CVOUT_CAL : 0;
+        gGba.caps      = CVOutsCalibrated() ? GBA_CAP_CVOUT_CAL : 0;
+        gGba.patchMask = patch_store_used();
 
-        // Launch the link engine on core 1 from the constructor, before Run(). Core 1
-        // immediately reassigns GPIO 8/9/2 to PIO; ComputerCard's own gpio use of those
-        // pins (PulseOut1/2, PulseIn1) is then simply superseded on the pad. Core 1's
-        // PIO/DMA claims don't collide with ComputerCard, which claims its resources later
-        // inside Run() (see 96_cathode for the same pattern).
-        multicore_launch_core1(core1_entry);
+        // Core 1 is NOT launched here any more — see StartLink(). The flash lockout has to be
+        // armed on core 0 first, and that has to happen before anything on core 1 could ask for
+        // a patch save.
     }
+
+    // Launch the link engine on core 1. Core 1 immediately reassigns GPIO 8/9/2 to PIO;
+    // ComputerCard's own gpio use of those pins (PulseOut1/2, PulseIn1) is then simply superseded
+    // on the pad. Core 1's PIO/DMA claims don't collide with ComputerCard, which claims its
+    // resources later inside Run() (see 96_cathode for the same pattern).
+    void StartLink() { multicore_launch_core1(core1_entry); }
 
     void __not_in_flash_func(ProcessSample)() override
     {
@@ -99,15 +107,38 @@ public:
         AudioOut2(gGba.gate    ? 2000 : 0);
 
         // ---- status on the LEDs ----
-        // 0 link, 1 gate in, 2 note sounding, 3 editing, 4+5 the edit page as a binary pair —
-        // the readout convention every diagnostic in this project already uses.
+        // While the link is up these are instrument state. While it is NOT, they become a
+        // diagnostic readout instead — because "LED 0 is blinking" was true for uploading,
+        // waiting for a console, and every kind of failure alike, which is no use at all when
+        // the thing you need to know is which of those is happening.
         bool booted = (gGba.state == LinkState::Booted);
-        LedOn(0, booted ? true : ((tick_ >> 12) & 1));   // solid = booted, blinking = connecting
-        LedOn(1, gGba.gate);
-        LedOn(2, gGba.noteVel != 0);
-        LedOn(3, gGba.mode == GBA_MODE_EDIT);
-        LedOn(4, (gGba.page & 1) != 0);
-        LedOn(5, (gGba.page & 2) != 0);
+        if (booted) {
+            LedOn(0, true);
+            LedOn(1, gGba.gate);
+            LedOn(2, gGba.noteVel != 0);
+            LedOn(3, gGba.mode == GBA_MODE_EDIT);
+            LedOn(4, (gGba.page & 1) != 0);            // edit page as a binary pair
+            LedOn(5, (gGba.page & 2) != 0);
+        } else {
+            LedOn(0, (tick_ >> 12) & 1);               // blinking: not booted
+            uint32_t p = gba_mb_progress;
+            if (p > 0) {
+                // Uploading: LEDs 1-5 are a five-segment progress bar. A 37 kB payload is five
+                // and a half seconds of transfer, and a bar moving is the difference between
+                // "wait" and "something is wrong".
+                for (int i = 0; i < 5; i++) LedOn(1 + i, (int)p >= (i + 1) * 20);
+            } else {
+                // Idle or failed: LEDs 1-3 are the last MultibootResult as a 3-bit code.
+                //   1 NoGBA (nothing answered)   2 BadHandshake   3 TransferError
+                //   4 CrcMismatch                5 BadPayload
+                uint8_t e = gGba.lastError;
+                LedOn(1, e & 1);
+                LedOn(2, e & 2);
+                LedOn(3, e & 4);
+                LedOn(4, false);
+                LedOn(5, false);
+            }
+        }
 
         tick_++;
     }
@@ -123,6 +154,27 @@ int main()
 
     GbaCard card;
     card.EnableNormalisationProbe();   // so an unpatched input reads 0 V instead of noise
+
+    // Launch core 1 FIRST, then arm the flash lockout. THE ORDER MATTERS AND GETTING IT WRONG
+    // IS SILENT.
+    //
+    // multicore_lockout_victim_init() installs an exclusive handler on core 0's inter-core FIFO
+    // interrupt. multicore_launch_core1() also uses that FIFO, for its startup handshake — so
+    // arming the lockout first means the handler eats the handshake replies and core 0 blocks
+    // for ever inside the launch, never reaching Run(). Core 1 still comes up and the GBA still
+    // boots and plays, which is what makes it so misleading: the console looks alive while the
+    // module's 48 kHz loop has never run once, so every knob, the switch and every CV input sit
+    // frozen at their power-on values.
+    //
+    // Armed after the launch, the lockout does its real job: a patch save erases and reprograms
+    // a flash sector, which stops XIP, and any code running from flash on either core during
+    // that window crashes the chip. Core 0 lives in ComputerCard's Run() loop, which is in
+    // flash. This parks it in a RAM-resident handler for the few milliseconds the write takes —
+    // and because the audio interrupt does not run during the lockout, a save clicks. That is
+    // the price of a deliberate action, and the reason this is not done from the audio path.
+    card.StartLink();
+    multicore_lockout_victim_init();
+
     // GPIO 2/8/9 are owned by the PIO link engine, not by ComputerCard's pulse I/O.
     card.Run();   // blocking; core 0 runs the 48 kHz loop, core 1 runs the GBA link
 }

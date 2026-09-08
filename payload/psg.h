@@ -64,6 +64,6 @@ void psg_noise_set(uint8_t divisor, uint8_t shift, uint8_t width);
 void psg_noise_trigger(void);
 
 // Built-in channel-3 wavetables, indexed by patch waveSel.
-#define PSG_WAVE_PRESETS 6
+#define PSG_WAVE_PRESETS 12
 extern const uint8_t psg_wave_preset[PSG_WAVE_PRESETS][16];
 extern const char   *psg_wave_name[PSG_WAVE_PRESETS];

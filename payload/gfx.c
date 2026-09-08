@@ -27,10 +27,28 @@ void rect(int x, int y, int w, int h, uint16_t color)
     }
 }
 
+// Bresenham. Deliberately division-free — see the note in gfx.h.
+void line(int x0, int y0, int x1, int y1, uint16_t color)
+{
+    int dx =  (x1 > x0) ? (x1 - x0) : (x0 - x1);
+    int dy = -((y1 > y0) ? (y1 - y0) : (y0 - y1));
+    int sx =  (x0 < x1) ? 1 : -1;
+    int sy =  (y0 < y1) ? 1 : -1;
+    int err = dx + dy;
+
+    for (;;) {
+        rect(x0, y0, 1, 1, color);
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = err * 2;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
 void srect(int x, int y, int w, int h, uint16_t color)
 {
     rect(x, y, w, h, color);
-    link_service();
+    gfx_idle();
 }
 
 // Draw one glyph at `scale`. Column-major font: bit r of column c is the pixel at (c, r).
@@ -57,7 +75,7 @@ void text(int x, int y, const char *s, uint16_t color, int scale)
 {
     for (int i = 0; s[i]; i++) {
         glyph(x + i * FONT_ADV * scale, y, s[i], color, scale);
-        link_service();
+        gfx_idle();
     }
 }
 
@@ -67,6 +85,17 @@ void text_centre(int y, const char *s, uint16_t color, int scale)
 }
 
 // Freestanding build: no libc, so render numbers by hand.
+int dec_at(char *out, int at, uint32_t v)
+{
+    char tmp[12];
+    int  n = 0;
+    if (v == 0) tmp[n++] = '0';
+    while (v) { tmp[n++] = (char)('0' + (v % 10)); v /= 10; }   // constant divisor
+    while (n) out[at++] = tmp[--n];
+    out[at] = 0;
+    return at;
+}
+
 void hex32(char *out, uint32_t v)
 {
     static const char H[] = "0123456789ABCDEF";

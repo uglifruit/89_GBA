@@ -1,89 +1,209 @@
-// synth.h — the instrument: pitch tracking, modulation matrix, envelope, voice state.
+// synth.h — the instrument: pitch, modulation, per-channel envelopes, ornaments, drums.
 //
-// Everything musical lives on this side of the link. The Workshop streams five raw inputs and
-// nothing else; what they DO is decided here, which is why the whole editor costs no protocol.
+// Everything musical lives on this side of the link. The Workshop streams seven raw sources and
+// a switch position; what they DO is decided here, which is why the whole editor costs no
+// protocol and a patch is a struct rather than a conversation.
 #pragma once
 
 #include <stdint.h>
 
-// ---- modulation destinations ----
-#define DEST_NONE    0
-#define DEST_PITCH   1
-#define DEST_DUTY    2
-#define DEST_DETUNE  3
-#define DEST_NOISE   4
-#define DEST_WAVE    5
-#define DEST_GLIDE   6
-#define DEST_DECAY   7
-#define DEST_SWEEP   8
-#define DEST_COUNT   9
-
-extern const char *dest_name[DEST_COUNT];
-
-// Modulation sources, in the order they appear on the MAP page and in g_in[].
-#define SRC_CV1  0
-#define SRC_CV2  1
-#define SRC_AUD1 2
-#define SRC_AUD2 3
-#define SRC_COUNT 4
+// ---- modulation sources, in MAP-page order (matches g_in[] then the knobs) ----
+#define SRC_CV1   0
+#define SRC_CV2   1
+#define SRC_AUD1  2
+#define SRC_AUD2  3
+#define SRC_MAIN  4
+#define SRC_X     5
+#define SRC_Y     6
+#define SRC_COUNT 7
 
 extern const char *src_name[SRC_COUNT];
 
-typedef struct {
-    uint8_t dest;
-    int8_t  depth;    // -64..+63. For DEST_PITCH, +32 is unity 1V/oct — see synth.c.
-} ModSlot;
+// ---- modulation destinations ----
+// Those marked per-voice are routed through the mod slot's channel mask, so one CV can raise the
+// level of channels 1 and 3 and leave 2 and 4 alone. The rest address hardware that exists once
+// (channel 1's sweep, channel 2's detune partner, the noise generator) or a global musical
+// setting, and ignore the mask.
+#define DEST_NONE     0
+#define DEST_PITCH    1    // per-voice
+#define DEST_LEVEL    2    // per-voice
+#define DEST_DUTY     3    // per-voice (channels 1 and 2 only)
+#define DEST_DETUNE   4    // channel 2
+#define DEST_GLIDE    5    // per-voice
+#define DEST_DECAY    6    // per-voice
+#define DEST_SWEEP    7    // channel 1
+#define DEST_NPITCH   8    // channel 4
+#define DEST_ORN      9    // per-voice: picks the slot for channels set to ORN_CV
+#define DEST_ORNRATE 10
+#define DEST_SCALE   11    // global: walks the scale list
+#define DEST_KEY     12    // global: transposes the root
+#define DEST_COUNT   13
+
+extern const char *dest_name[DEST_COUNT];
+
+// ---- trigger sources: the columns of the TRIG pin grid ----
+#define TRIG_PU2   0
+#define TRIG_SW    1
+#define TRIG_BTN   2
+#define TRIG_COUNT 3
+
+extern const char *trig_name[TRIG_COUNT];
+
+// ---- GBA button actions (BTN page) ----
+#define ACT_NONE      0
+#define ACT_TRIGGER   1
+#define ACT_HOLD      2
+#define ACT_OCT_UP    3
+#define ACT_OCT_DN    4
+#define ACT_DETUNE_UP 5
+#define ACT_DETUNE_DN 6
+#define ACT_DUTY1     7
+#define ACT_DUTY2     8
+#define ACT_CH1       9
+#define ACT_CH2      10
+#define ACT_CH3      11
+#define ACT_CH4      12
+#define ACT_ORN_UP   13
+#define ACT_ORN_DN   14
+#define ACT_SEMI_UP  15
+#define ACT_SEMI_DN  16
+#define ACT_COUNT    17
+
+extern const char *act_name[ACT_COUNT];
+
+#define BTN_SLOTS 8        // A, B, L, R, Up, Down, Left, Right
+extern const char *btn_name[BTN_SLOTS];
+
+// ---- ornaments ----
+// Six slots of sixteen semitone offsets. Six rather than eight so the whole patch stays inside
+// one 256-byte storage slot — see the size assertion in synth.c.
+#define ORN_SLOTS 6
+#define ORN_STEPS 16
+#define ORN_OFF   0
+#define ORN_CV    (ORN_SLOTS + 1)   // slot chosen live by a DEST_ORN modulation
 
 typedef struct {
-    uint8_t chEnable;        // bit per PSG channel 0..3
-    uint8_t duty[2];         // ch1, ch2
-    int8_t  detune;          // ch2 offset in 1/16 semitone
-    uint8_t waveSel;         // index into psg_wave_preset
-    uint8_t waveVol;         // PSG_WAVE_*
-    uint8_t noiseDiv, noiseShift, noiseWidth, noiseLevel;
-    uint8_t atk, dec, sus, rel;   // 0..15
-    uint8_t retrig;               // retrigger the envelope on every gate edge
-    uint8_t sweepTime, sweepDir, sweepShift;
-    uint8_t glide;                // 0..15, 0 = instant
-    int8_t  octave;               // -3..+3
-    uint8_t masterL, masterR;     // 0..7
-    uint8_t ratio;                // 0 = 25%, 1 = 50%, 2 = 100%
-    uint8_t baseNote;             // MIDI note produced by 0 V on the pitch input
-    int16_t cvScale;              // ADC counts per semitone, Q4 (455 = 28.4 counts)
-    int16_t cvOffset;             // ADC counts of offset trim
-    ModSlot mod[SRC_COUNT];
+    uint8_t len;                 // steps in use, 0 = slot empty
+    uint8_t rate;                // 0..7
+    uint8_t mode;                // 0 = loop while held, 1 = one-shot then hold last
+    uint8_t pad;
+    int8_t  step[ORN_STEPS];
+} Ornament;
+
+// ---- channel pan / enable ----
+#define PAN_OFF  0
+#define PAN_L    1
+#define PAN_R    2
+#define PAN_BOTH 3
+extern const char *pan_name[4];
+
+typedef struct {
+    uint8_t pan;
+    uint8_t level;               // 0..15 mixer level, scales the envelope output
+    int8_t  semi;
+    uint8_t atk, dec, sus, rel;
+    uint8_t glide;               // per-voice portamento
+    uint8_t trig;                // bitmask over TRIG_*
+    uint8_t orn;                 // ORN_OFF, 1..ORN_SLOTS, or ORN_CV
+} Channel;
+
+typedef struct {
+    uint8_t dest;
+    int8_t  depth;               // -64..+63. For DEST_PITCH, +32 is unity 1V/oct.
+    uint8_t chMask;              // which voices this slot reaches, bit per channel
+} ModSlot;
+
+// ---- scales ----
+// Fifteen built in, then four the user builds note by note on the SET page.
+#define SCALE_BUILTIN 15
+#define SCALE_USER    4
+#define SCALE_COUNT   (SCALE_BUILTIN + SCALE_USER)
+extern const char *scale_name[SCALE_COUNT];
+extern const char *key_name[12];
+
+// ---- drums ----
+// A drum fires when an input goes HIGH, so any jack carrying a trigger, a gate, or simply a loud
+// enough signal becomes a drum pad. The sounds are synthesised on the PSG rather than sampled:
+// the GBA's sample channels would need DMA and a timer of their own, and a synthesised kick is
+// editable in a way a sample is not.
+#define DRUM_SRC_AUD1  0
+#define DRUM_SRC_AUD2  1
+#define DRUM_SRC_CV1   2
+#define DRUM_SRC_CV2   3
+#define DRUM_SRC_PU2   4
+#define DRUM_SRC_SW    5
+#define DRUM_SRC_COUNT 6
+extern const char *drum_src_name[DRUM_SRC_COUNT];
+
+#define DRUM_PRESETS 9     // index 0 is OFF
+extern const char *drum_name[DRUM_PRESETS];
+
+// ---- the patch ----
+// Stored verbatim in one 256-byte flash slot on the Workshop. The magic and version come first
+// so an erased slot (all 0xFF) can never be mistaken for a patch.
+#define PATCH_MAGIC   0x4742u      // 'GB'
+#define PATCH_VERSION 1
+
+typedef struct {
+    uint16_t magic;
+    uint8_t  version;
+    uint8_t  pad0;
+
+    Channel  ch[4];
+    uint8_t  duty[2];
+    int8_t   detune;
+    uint8_t  waveSel;
+    uint8_t  noiseDiv, noiseShift, noiseWidth, retrig;
+    uint8_t  sweepTime, sweepDir, sweepShift;
+    int8_t   octave;
+    uint8_t  masterL, masterR, ratio, baseNote;
+    int16_t  cvScale, cvOffset;
+
+    ModSlot  mod[SRC_COUNT];
+    uint8_t  pad1;
+    uint8_t  btnAct[BTN_SLOTS];
+
+    int8_t   tuneCents;
+    uint8_t  key;
+    uint8_t  scale;
+    uint8_t  drumMode;
+    uint8_t  drumThresh;                 // 0..15, how high "high" has to be
+    uint8_t  drumMap[DRUM_SRC_COUNT];    // preset per input, 0 = off
+    uint8_t  pad2;
+
+    uint16_t userScale[SCALE_USER];      // 12-bit degree masks
+    Ornament orn[ORN_SLOTS];
 } Patch;
 
 extern Patch g_patch;
 
-// ---- live voice state, for the UI to display ----
-extern int32_t  g_pitchQ8;     // current (glided) pitch in Q8 MIDI-note units
-extern uint8_t  g_note;        // nearest MIDI note, published upstream
-extern uint16_t g_env;         // 0..65535
-extern uint8_t  g_noteOn;
-extern uint8_t  g_latch;
-extern uint8_t  g_chLevel[4];  // 0..15, what each channel is actually sounding at
+// ---- live voice state, for the UI ----
+extern int32_t  g_pitchQ8;
+extern int32_t  g_chPitch[4];
+extern uint8_t  g_note;
+extern uint8_t  g_hold;
+extern uint16_t g_chEnv[4];
+extern uint8_t  g_chLevel[4];
+extern uint8_t  g_chNoteOn[4];
+extern uint8_t  g_chOrnStep[4];
+extern uint8_t  g_anyNoteOn;
+extern uint8_t  g_btnTrigHeld;
+extern uint8_t  g_drumHit[DRUM_SRC_COUNT];   // counts down after a hit; lights the DRUM page
+
+extern const uint16_t ENV_MS[16];
 
 void synth_init(void);
-
-// Runs the control-rate update as many times as the free-running timer says are due. Called
-// from the main loop; cheap when nothing is owed.
 void synth_update(void);
+void synth_default_patch(void);       // reset to the factory patch
+int  synth_patch_bytes(void);         // sizeof(Patch), for the transfer
+int  synth_patch_valid(const Patch *p);
+void synth_patch_applied(void);       // re-derive anything cached from the patch
 
-// Button edge/repeat state, recomputed each control tick. The UI reads these rather than
-// polling REG_KEYINPUT itself, so PLAY and EDIT agree on exactly one debounced view.
-extern uint16_t g_btn;      // level
-extern uint16_t g_btnEdge;  // pressed this tick
-extern uint16_t g_btnRep;   // auto-repeat fired this tick
-extern uint16_t g_btnStep;  // edge OR repeat: what a "nudge this value" control wants
-
-// Buttons are scanned at the 1 kHz control rate but the UI runs at frame rate, so edges would
-// be missed if it read g_btnEdge directly. These latches accumulate until the UI drains them.
+// Button state, sampled at the control rate; the UI drains the latches at frame rate.
+extern uint16_t g_btn;
 extern volatile uint16_t g_btnEdgeLatch;
 extern volatile uint16_t g_btnStepLatch;
-uint16_t synth_take_edges(void);   // drain g_btnEdgeLatch
-uint16_t synth_take_steps(void);   // drain g_btnStepLatch
+uint16_t synth_take_edges(void);
+uint16_t synth_take_steps(void);
 
-// Set by the UI. While editing, the D-pad belongs to the editor, so the PLAY-mode performance
-// controls (octave, detune, duty) stand down rather than both acting on the same press.
 extern uint8_t g_editMode;

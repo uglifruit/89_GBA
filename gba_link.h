@@ -63,6 +63,7 @@ struct GbaShared {
     volatile LinkState state     = LinkState::Idle;
     volatile uint8_t   lastError = 0;    // MultibootResult of the last failed attempt
     volatile uint32_t  linkHz    = 0;    // SCK rate that multiboot actually succeeded at
+    volatile uint16_t  patchMask = 0;    // which of the 16 flash slots hold a patch
 };
 
 // The single shared instance (defined in gba_link.cpp).

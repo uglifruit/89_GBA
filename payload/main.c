@@ -28,26 +28,48 @@
 #define REG_BASE   0x04000000
 #define REG_VCOUNT (*(volatile uint16_t *)(REG_BASE + 0x0006))
 
+// Called from inside every drawing routine and from the frame wait. Servicing the link was
+// never the whole job: the synth's control tick has to keep running while the screen is being
+// drawn, or its rate becomes the frame rate and every envelope and portamento time changes
+// depending on which page you happen to be looking at.
+void gfx_idle(void)
+{
+    link_service();
+    synth_update();
+}
+
 int main(void)
 {
-    // ---- 1. LCD up and the boot proof on screen ----
+    // ---- 1. LCD up ----
     gfx_init();
-    rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);
-    text_centre(60, "MTM - Workshop Computer Link", COL_TITLE, 1);
-    text_centre(76, "GBA PSG VOICE", COL_OK, 1);
-    rect(40, 92, SCREEN_W - 80, 1, COL_DIM);
-    text_centre(100, "waiting for host", COL_DIM, 1);
 
     // ---- 2. Sound, 3. link ----
     synth_init();      // calls psg_init(), which sets the master enable first
     link_init();
     ui_init();
 
-    // Hold the splash until the host actually says something, so "booted" and "connected" stay
-    // visibly different states.
+    // NO SPLASH IN THE NORMAL CASE.
+    //
+    // There used to be a title card here. It served as proof the payload had booted, but that
+    // job now belongs to the green screen crt0.s paints before the C runtime even exists — and
+    // the host starts talking within a few milliseconds of the link coming up, so the card was
+    // on screen for about as long as it took to clock one word. Not long enough to read, and
+    // long enough to look like a glitch.
+    //
+    // The one case where a message earns its place is the host NOT talking, so that is the only
+    // case that gets one. Until then the green boot proof stays up, which is itself the useful
+    // reading: the image ran.
     {
         uint32_t guard = 0;
-        while (g_rx == 0 && ++guard < 2000000u) link_service();
+        while (g_rx == 0 && ++guard < 200000u) gfx_idle();
+        if (g_rx == 0) {
+            rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);
+            text_centre(56, "MTM WORKSHOP COMPUTER", COL_TITLE, 1);
+            text_centre(72, "GBA PSG VOICE", COL_OK, 1);
+            rect(40, 88, SCREEN_W - 80, 1, COL_DIM);
+            text_centre(100, "WAITING FOR HOST", COL_WAIT, 1);
+            while (g_rx == 0) gfx_idle();
+        }
     }
 
     for (;;) {
@@ -63,8 +85,8 @@ int main(void)
 
         ui_frame();
 
-        // Pace to roughly one frame without ever blocking the link.
-        while (REG_VCOUNT <  SCREEN_H) link_service();
-        while (REG_VCOUNT >= SCREEN_H) link_service();
+        // Pace to roughly one frame without ever blocking the link or stalling the synth.
+        while (REG_VCOUNT <  SCREEN_H) gfx_idle();
+        while (REG_VCOUNT >= SCREEN_H) gfx_idle();
     }
 }

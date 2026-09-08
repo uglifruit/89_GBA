@@ -4,8 +4,10 @@
 #include "gba_spi.h"
 #include "gba_multiboot.h"
 #include "gba_proto.h"
+#include "patch_store.h"
 
 #include "pico/stdlib.h"
+#include <cstring>
 
 GbaShared gGba;
 
@@ -38,7 +40,15 @@ static constexpr int kMaxConsecutiveBad = 5000;
 // automatic ladder that kept the first rate to succeed, which meant it reported whichever rung
 // it happened to be on when the console finished booting — timing luck, not a measurement.
 // Manual per-speed testing with repeats is what settled it.
-static constexpr uint32_t kMultibootLadder[] = { 100'000, 50'000, 25'000, 10'000, 5'000 };
+// TWO RUNGS, NOT FIVE, AND THE PAYLOAD SIZE IS WHY.
+//
+// The ladder used to run down to 5 kHz. That was harmless when the payload was 5 kB; with a
+// 37 kB payload, 5 kHz is nearly two minutes of transfer during which the module looks hung,
+// and 25 kHz is twenty seconds. Since 100 kHz is the rate manual testing proved repeatable
+// (mbrate.uf2), a failure at 100 kHz is far more likely to be a one-off than evidence that a
+// slower rate is needed — so it is better to fail fast and try again than to grind through
+// rungs that each take longer than the last.
+static constexpr uint32_t kMultibootLadder[] = { 100'000, 50'000 };
 static constexpr int kLadderLen = (int)(sizeof(kMultibootLadder) / sizeof(kMultibootLadder[0]));
 
 // THE GAP IS THE POINT, and it applies to EVERY word we send — control words included.
@@ -105,22 +115,64 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
         int      pair           = 0;    // alternates {CV1,CV2} and {AUD1,AUD2}
         uint32_t reportedEdges  = gGba.gateEdges;
         uint32_t seq            = 0;
+        uint32_t knobIx         = 0;
+        uint8_t  lastSwitch     = 0xFF;
+
+        // ---- patch transfer state ----
+        // A save arrives as a stream of indexed bytes; the seen-bitmap is what lets the host tell
+        // "the GBA has sent everything" from "a word went missing", without which a half-received
+        // patch would be written to flash and look like corruption later.
+        static uint8_t  patchBuf[GBA_PATCH_SLOT_BYTES];
+        static uint8_t  patchSeen[GBA_PATCH_SLOT_BYTES / 8];
+        int      rxSlot   = -1;
+        int      txSlot   = -1;      // a LOAD in progress
+        int      txPos    = 0;
+        int      txLen    = 0;
+        int      ackSlot  = -1;
+        int      ackLeft  = 0;
 
         for (;;) {
             uint32_t word;
 
-            // Slow housekeeping, interleaved one word at a time so it never displaces more
-            // than a single input update: knobs and switch round-robin, then a HELLO refresh.
-            uint32_t slot = seq & 0x3Fu;
-            if (slot == 0x10u) {
-                word = gba_knob_pack(0, gGba.knobs[0]);
-            } else if (slot == 0x20u) {
-                word = gba_knob_pack(1, gGba.knobs[1]);
-            } else if (slot == 0x30u) {
-                word = gba_knob_pack(2, gGba.knobs[2]);
-            } else if (slot == 0x38u) {
-                word = gba_control_pack(GBA_OP_SWITCH, gGba.switchPos);
-            } else if ((seq & 0x7FFu) == 0x7FFu) {
+            // Housekeeping is interleaved one word at a time so it never displaces more than a
+            // single input update.
+            uint8_t sw = gGba.switchPos;
+            if (txSlot >= 0) {
+                // Streaming a stored patch down. This owns the channel for about a quarter of a
+                // second; the inputs hold their last value, which is exactly what you want while
+                // the instrument is being reconfigured anyway.
+                if (txPos < txLen) {
+                    word = gba_control_pack(GBA_OP_PATCH,
+                                            ((uint32_t)txPos << 16) | patchBuf[txPos]);
+                    txPos++;
+                } else {
+                    word = gba_control_pack(GBA_OP_PATCH_DONE, (uint32_t)txSlot);
+                    txSlot = -1;
+                }
+            } else if (ackLeft > 0) {
+                // Repeated a few times: a lost ack would leave the GBA resending for ever.
+                ackLeft--;
+                word = gba_control_pack(GBA_OP_PATCH_ACK, (uint32_t)ackSlot);
+            } else if (sw != lastSwitch) {
+                // THE SWITCH GOES FIRST, the moment it moves. It is a trigger source on the GBA
+                // (the SW column of the TRIG page), so it earns the same priority the note gets
+                // in the upstream direction: one poll of latency rather than a wait for its turn
+                // in a rotation. A momentary switch used to play notes is unusable otherwise.
+                lastSwitch = sw;
+                word = gba_control_pack(GBA_OP_SWITCH, sw);
+            } else if ((seq & 0x7u) == 0x7u) {
+                // Knobs round-robin, one word in eight. They are modulation sources now rather
+                // than a display curiosity, so about 40 Hz each instead of the previous 4 Hz.
+                // That costs an eighth of the stream and still leaves each CV pair above 400 Hz.
+                word = gba_knob_pack(knobIx, gGba.knobs[knobIx]);
+                knobIx = (knobIx + 1u) % 3u;
+            } else if ((seq & 0x1FFu) == 0x100u) {
+                // Which slots hold a patch, so the GBA's store page can show free from used
+                // without asking. Cheap, and it keeps the display honest after a save.
+                word = gba_control_pack(GBA_OP_SLOTS, gGba.patchMask);
+            } else if ((seq & 0x7FFu) == 0x400u) {
+                // Deliberately NOT congruent to 7 mod 8, so it can never collide with a knob slot
+                // and quietly cost a knob update every couple of seconds.
                 word = gba_hello_pack(gGba.caps);
             } else {
                 // The hot path. Report exactly one gate edge per increment: advancing by one
@@ -152,8 +204,56 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
                 gGba.mode  = (uint8_t)((GBA_UP_DATA(reply) >>  8) & 0xF);
                 gGba.flags = (uint8_t)(GBA_UP_DATA(reply) & 0xFF);
                 break;
+            case GBA_UP_PATCH: {
+                uint32_t d  = GBA_UP_DATA(reply);
+                uint32_t ix = (d >> 8) & 0xFFu;
+                if (rxSlot >= 0 && ix < GBA_PATCH_SLOT_BYTES) {
+                    patchBuf[ix]         = (uint8_t)(d & 0xFFu);
+                    patchSeen[ix >> 3]  |= (uint8_t)(1u << (ix & 7));
+                }
+                break;
+            }
+
+            case GBA_UP_REQ: {
+                uint32_t d    = GBA_UP_DATA(reply);
+                uint32_t req  = (d >> 12) & 0xFu;
+                uint32_t slot = (d >> 8) & 0xFu;
+
+                if (req == GBA_REQ_SAVE) {
+                    if (rxSlot != (int)slot) {
+                        rxSlot = (int)slot;
+                        memset(patchSeen, 0, sizeof(patchSeen));
+                    }
+                } else if (req == GBA_REQ_SAVE_END && rxSlot == (int)slot) {
+                    // Only commit a COMPLETE block. An incomplete one is simply ignored: the GBA
+                    // is still repeating the stream, so the next pass fills the holes and the
+                    // save succeeds a few hundred milliseconds later instead of storing rubbish.
+                    bool full = true;
+                    for (unsigned i = 0; i < sizeof(patchSeen); i++)
+                        if (patchSeen[i] != 0xFF) { full = false; break; }
+                    if (full && patch_store_save((int)slot, patchBuf)) {
+                        ackSlot = (int)slot;
+                        ackLeft = 4;
+                        rxSlot  = -1;
+                        gGba.patchMask = patch_store_used();
+                    }
+                } else if (req == GBA_REQ_LOAD && txSlot < 0) {
+                    txLen = GBA_PATCH_SLOT_BYTES;
+                    if (patch_store_load((int)slot, patchBuf)) {
+                        txSlot = (int)slot;
+                        txPos  = 0;
+                    } else {
+                        // Nothing stored there: say so at once rather than sending 256 bytes of
+                        // erased flash for the GBA to reject.
+                        gba_spi_xfer32(gba_control_pack(GBA_OP_PATCH_DONE, slot | 0x80u));
+                        link_gap();
+                    }
+                }
+                break;
+            }
+
             case GBA_UP_PARAM:
-                break;                          // reserved: patch echo, unused in v1
+                break;                          // reserved
             default:
                 gGba.rxBad++;
                 if (++consecutiveBad > kMaxConsecutiveBad) goto dropped;

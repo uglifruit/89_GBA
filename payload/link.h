@@ -42,8 +42,40 @@ extern volatile uint32_t g_rx;           // every word, good or bad
 extern volatile uint32_t g_streamRx;     // valid stream words
 extern volatile uint32_t g_streamBad;    // words rejected by tag or check bits
 
+// Per-kind receive counters, shown on the CAL page. These exist because "the knobs do not work"
+// has at least three completely different causes that look identical from the front panel: the
+// host not sending, the words not arriving, or core 0 never updating the values in the first
+// place. Counting each kind separates them in one glance instead of one guess.
+extern volatile uint32_t g_ctlRx;        // CONTROL words decoded, any opcode
+extern volatile uint32_t g_knobRx;       // GBA_OP_KNOB specifically
+extern volatile uint32_t g_swRx;         // GBA_OP_SWITCH specifically
+
 void link_init(void);
 void link_set_buttons(uint16_t b);
+
+// ---- patch transfer -------------------------------------------------------------------------
+// One byte per link word in either direction, each carrying its own index, so a lost word leaves
+// a hole the receiver can see rather than silently shifting everything after it. A save repeats
+// the whole block until the host acknowledges, which makes the transfer self-healing without an
+// explicit retransmit protocol.
+#define LINK_XFER_NONE 0
+#define LINK_XFER_SAVE 1
+#define LINK_XFER_LOAD 2
+
+#define LINK_RESULT_IDLE  0
+#define LINK_RESULT_OK    1
+#define LINK_RESULT_EMPTY 2
+
+extern volatile uint8_t g_xferState;                       // LINK_XFER_*
+extern volatile uint8_t g_xferSlot;
+extern volatile uint8_t g_xferResult;                      // LINK_RESULT_*
+extern volatile uint8_t g_loadReady;                       // a LOAD landed; the UI clears it
+extern volatile uint16_t g_slotMask;                       // which host slots hold a patch
+extern volatile uint8_t g_patchBuf[GBA_PATCH_SLOT_BYTES];  // staging for both directions
+
+void link_begin_save(uint8_t slot, const uint8_t *data, int len);
+void link_begin_load(uint8_t slot);
+int  link_xfer_progress(void);      // 0..100 while a transfer runs
 void link_post_note(uint8_t note, uint8_t gate);
 void link_post_status(uint8_t page, uint8_t mode, uint8_t flags);
 

@@ -39,6 +39,9 @@ volatile uint8_t  g_hostSeen  = 0;
 volatile uint32_t g_rx        = 0;
 volatile uint32_t g_streamRx  = 0;
 volatile uint32_t g_streamBad = 0;
+volatile uint32_t g_ctlRx     = 0;
+volatile uint32_t g_knobRx    = 0;
+volatile uint32_t g_swRx      = 0;
 
 // ---- what we send back ----
 // Only one word comes back per poll, so the kinds share the channel by PRIORITY, not by
@@ -71,6 +74,59 @@ volatile uint32_t g_ltWild      = 0;
 volatile int      g_ltHave      = 0;
 static uint16_t   g_ltPrev      = 0;
 
+// ---- patch transfer state ----
+volatile uint8_t  g_xferState  = LINK_XFER_NONE;
+volatile uint8_t  g_xferSlot   = 0;
+volatile uint8_t  g_xferResult = LINK_RESULT_IDLE;
+volatile uint8_t  g_loadReady  = 0;
+volatile uint16_t g_slotMask   = 0;
+volatile uint8_t  g_patchBuf[GBA_PATCH_SLOT_BYTES];
+
+static volatile int      g_txPos = 0;
+static volatile uint8_t  g_rxSeen[GBA_PATCH_SLOT_BYTES / 8];
+
+// A slot is GBA_PATCH_SLOT_BYTES wide and the WHOLE slot is sent, zero-padded past the end of
+// the patch. The host has no idea how big a Patch is, so it can only judge a transfer complete
+// by seeing every byte of the slot; sending only sizeof(Patch) left the tail bytes permanently
+// unseen, the host never committed, never acknowledged, and the GBA resent for ever — which
+// also monopolised the upstream channel and froze the button reports.
+void link_begin_save(uint8_t slot, const uint8_t *data, int len)
+{
+    for (int i = 0; i < GBA_PATCH_SLOT_BYTES; i++)
+        g_patchBuf[i] = (i < len) ? data[i] : 0;
+
+    g_txPos      = 0;
+    g_xferSlot   = slot;
+    g_xferResult = LINK_RESULT_IDLE;
+    g_xferState  = LINK_XFER_SAVE;
+}
+
+void link_begin_load(uint8_t slot)
+{
+    for (unsigned i = 0; i < sizeof(g_rxSeen); i++) g_rxSeen[i] = 0;
+    g_xferSlot   = slot;
+    g_xferResult = LINK_RESULT_IDLE;
+    g_txPos      = 0;
+    g_xferState  = LINK_XFER_LOAD;
+}
+
+int link_xfer_progress(void)
+{
+    if (g_xferState == LINK_XFER_SAVE) {
+        int pos = g_txPos;
+        return (pos * 100) / (GBA_PATCH_SLOT_BYTES + 2);        // constant divisor
+    }
+    if (g_xferState == LINK_XFER_LOAD) {
+        int n = 0;
+        for (unsigned i = 0; i < sizeof(g_rxSeen); i++) {
+            uint8_t b = g_rxSeen[i];
+            while (b) { n += b & 1; b >>= 1; }
+        }
+        return (n * 100) / GBA_PATCH_SLOT_BYTES;
+    }
+    return 100;
+}
+
 void link_set_buttons(uint16_t b) { g_buttons = b; }
 
 void link_post_note(uint8_t note, uint8_t gate)
@@ -91,6 +147,23 @@ static uint32_t next_reply(uint32_t got)
 {
     if (g_bench)    return gba_up_pack(GBA_UP_BUTTONS, (uint16_t)got);   // echo downstream
     if (g_linkTest) return gba_up_pack(GBA_UP_BUTTONS, (uint16_t)g_ltVal);
+
+    // A transfer owns the upstream channel while it runs. It is a deliberate, brief action and
+    // the note/button traffic can wait a quarter of a second for it.
+    if (g_xferState == LINK_XFER_SAVE) {
+        const int len = GBA_PATCH_SLOT_BYTES;
+        int pos = g_txPos;
+        g_txPos = (pos + 1 > len + 1) ? 0 : pos + 1;
+        if (pos == 0)   return gba_up_pack(GBA_UP_REQ, (GBA_REQ_SAVE << 12) | (g_xferSlot << 8));
+        if (pos <= len) return gba_up_pack(GBA_UP_PATCH, ((pos - 1) << 8) | g_patchBuf[pos - 1]);
+        return gba_up_pack(GBA_UP_REQ, (GBA_REQ_SAVE_END << 12) | (g_xferSlot << 8));
+    }
+    if (g_xferState == LINK_XFER_LOAD) {
+        // Ask about once every sixteen words until the host starts answering, so a lost request
+        // costs 16 ms rather than hanging the page.
+        if ((++g_txPos & 0xF) == 0)
+            return gba_up_pack(GBA_UP_REQ, (GBA_REQ_LOAD << 12) | (g_xferSlot << 8));
+    }
 
     if (g_upNoteDirty)   { g_upNoteDirty = 0;   return gba_up_pack(GBA_UP_NOTE,   g_upNote); }
     if (g_upStatusDirty && (g_rx & 7u) == 0u) {
@@ -120,16 +193,52 @@ static void decode_applet(uint32_t got)
 
     case GBA_TAG_CONTROL: {
         uint32_t arg = GBA_CTL_ARG(got);
+        g_ctlRx++;
         switch (GBA_CTL_OP(got)) {
         case GBA_OP_HELLO:
             g_hostCaps = (uint16_t)(arg & 0xFFFFu);
             g_hostSeen = 1;
             break;
         case GBA_OP_KNOB:
+            g_knobRx++;
             g_knob[(arg >> 22) & 0x3u] = (uint16_t)((arg >> 10) & 0xFFFu);
             break;
         case GBA_OP_SWITCH:
+            g_swRx++;
             g_switch = (uint8_t)(arg & 0x3u);
+            break;
+
+        case GBA_OP_PATCH: {
+            uint32_t ix = (arg >> 16) & 0xFFu;
+            if (ix < GBA_PATCH_SLOT_BYTES) {
+                g_patchBuf[ix] = (uint8_t)((arg >> 8) & 0xFFu);
+                g_rxSeen[ix >> 3] |= (uint8_t)(1u << (ix & 7));
+            }
+            break;
+        }
+
+        case GBA_OP_PATCH_DONE:
+            if (g_xferState == LINK_XFER_LOAD) {
+                // Bit 7 means the host had nothing stored in that slot.
+                if (arg & 0x80u) {
+                    g_xferResult = LINK_RESULT_EMPTY;
+                } else {
+                    g_xferResult = LINK_RESULT_OK;
+                    g_loadReady  = 1;
+                }
+                g_xferState = LINK_XFER_NONE;
+            }
+            break;
+
+        case GBA_OP_SLOTS:
+            g_slotMask = (uint16_t)(arg & 0xFFFFu);
+            break;
+
+        case GBA_OP_PATCH_ACK:
+            if (g_xferState == LINK_XFER_SAVE && (arg & 0x1Fu) == g_xferSlot) {
+                g_xferResult = LINK_RESULT_OK;
+                g_xferState  = LINK_XFER_NONE;
+            }
             break;
         default:
             break;   // opcode 0 and anything unknown: ignore, never act on a zero word
@@ -206,8 +315,16 @@ static void decode_diagnostic(uint32_t got)
 // word differed from BENCH_ENTER) has gone: the display panel that read those counters was
 // removed once the fault it was chasing was closed, so it was a 32-iteration loop on every
 // single word feeding nothing. That cost is not acceptable inside an interrupt handler.
+// Set once link_init() has configured the port. Before that, SIODATA32 holds whatever the BIOS
+// left behind and SIOCNT has never been armed, so every service call during the boot splash was
+// harvesting garbage and counting it as a rejected word. That is where the REJ counter's initial
+// non-zero reading came from: it was us, before the link existed. Now REJ starts at zero and any
+// movement at all is a real event.
+static volatile uint8_t g_linkReady = 0;
+
 static void link_pump(void)
 {
+    if (!g_linkReady) return;
     if (REG_SIOCNT & SIO_START) return;        // transfer still in flight
 
     uint32_t got = REG_SIODATA32;
@@ -274,5 +391,6 @@ void link_init(void)
     REG_IME = 1;
 #endif
 
+    g_linkReady = 1;
     REG_SIOCNT |= SIO_START;                   // arm immediately
 }
