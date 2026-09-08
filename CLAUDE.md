@@ -119,22 +119,27 @@ C-compatible (payload is C, firmware is C++): plain `#define` and `static inline
 1. **`SOUNDCNT_X` bit 7 (master enable) must be set BEFORE any other sound register write.**
    With the master off the sound registers are not writable at all, and clearing bit 7 resets
    them. `psg_init()` does this first.
-2. **NEVER WRITE A BARE ZERO TO AN `NRx2` ENVELOPE REGISTER.** A channel's DAC is live only
-   while the top five bits — volume *and* direction together — are non-zero, so a plain zero
-   silences the channel *and* switches its DAC off, which disables the channel outright.
-   Turning the DAC back on does not re-enable it; only a trigger does. `psg_sq_voice()` and
-   `psg_noise_voice()` therefore set the direction bit whenever the volume is 0: equally
-   silent, but the channel stays armed, so a retrigger from silence is instant rather than a
-   recovery. This single fact was behind three separate faults — sustain 0 refusing to
-   retrigger, the volume floor that existed to work around it, and the "first note sounds,
-   every note after it is silent" bug before that.
-3. **A trigger is a NOTE START, never a volume update.** The DMG only loads `NRx2`'s volume on
-   a trigger, but the **AGB applies the write immediately**, which is what every GBA chip
-   engine relies on. Retriggering each envelope step therefore bought nothing and cost:
-   a duty-phase discontinuity every step (a quiet channel clicks its way through a fade),
-   channel 1's sweep re-armed and its overflow check re-run once per step, and channel 4's
-   LFSR reloaded so hiss became a tone at the step rate. `synth.c` keeps the switch as
-   `PSG_VOL_NEEDS_RETRIGGER 0` — one line to put back if an envelope ever goes flat.
+2. **The `NRx2` envelope direction bit is set ALWAYS, never toggled.** Two rules meet on it. A
+   channel's DAC is live only while `NRx2`'s top five bits — volume *and* direction together —
+   are non-zero, so a bare zero silences the channel *and* switches its DAC off, which disables
+   the channel; only a trigger brings it back. And "zombie mode": *changing* the direction bit
+   while a channel plays makes the hardware recompute the volume as `16 - volume`. Setting the
+   bit unconditionally means neither can ever fire, and with the envelope period left at 0 the
+   hardware envelope stays disabled, so the value written is still the instantaneous level. This
+   one bit was behind sustain 0 refusing to retrigger, the volume floor that existed to work
+   around it, and the older "first note sounds, every note after it is silent".
+3. **A software envelope MUST retrigger on every volume change.** The DMG rule holds on this
+   console: an `NRx2` volume write is only loaded into the channel by a trigger. Taking the
+   retriggers out was tried and measured — the envelope stopped moving, notes never fell to
+   silence, and a mixer level change only took effect at the next note. `PSG_VOL_NEEDS_RETRIGGER`
+   in `synth.c` records the finding; it is 1 and should stay 1.
+   Retriggering is not free, and two of its three costs are fixable:
+   - it resets the duty phase, so each step is a small discontinuity. Unavoidable.
+   - **on channel 1 it re-runs the sweep's overflow check, and an overflow disables the channel
+     outright** — so retriggering at the control rate had channel 1 switching itself off and on
+     continuously. That crackle, not the phase reset, is why channel 1 was much the worst. The
+     sweep is now armed only on a note start and held at zero for volume-only retriggers.
+   - on channel 4 it reloads the noise LFSR, making hiss repeat at the step rate.
 4. **Envelopes are software**, updated at ~1 kHz off Timer 0. The hardware envelope runs once
    per trigger and cannot sustain-then-release, which is the exact shape a gate input needs.
 5. **No runtime division on the GBA.** The payload links `-nostdlib`, so libgcc is absent and

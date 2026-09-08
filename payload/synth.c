@@ -910,10 +910,10 @@ static void synth_tick(void)
         psg_noise_voice(p->drumMode ? 0 : g_chLevel[3]);
     }
 
-    {
-        int sw = (int)clampi((int32_t)p->sweepShift + (modSweep >> 6), 0, 7);
-        psg_sq_sweep((uint8_t)sw, p->sweepDir, p->sweepTime);
-    }
+    // The sweep register is NOT written here. See the trigger block: it is armed on a note start
+    // and zeroed for volume-only retriggers, because a trigger re-runs the sweep's overflow check
+    // and an overflow disables the channel.
+    int sweepShift = (int)clampi((int32_t)p->sweepShift + (modSweep >> 6), 0, 7);
 
     psg_master(p->masterL, p->masterR, p->ratio);
 
@@ -931,26 +931,30 @@ static void synth_tick(void)
 
     psg_enable(enL, enR);
 
-    // ---- trigger, AFTER the volume writes ---------------------------------------------------------
-    // A TRIGGER IS A NOTE START, NOT A VOLUME UPDATE.
+    // ---- trigger, AFTER the volume writes, AND on every volume CHANGE -----------------------------
+    // THIS HARDWARE REALLY DOES NEED IT. Measured, not assumed: with the retriggers taken out
+    // the envelope stopped moving altogether and notes never dropped to silence, because the
+    // channel keeps playing at whatever volume was latched by its last trigger. So the DMG rule
+    // holds on this console - an NRx2 volume write is only loaded into the channel BY A TRIGGER -
+    // and software envelopes have to retrigger on every step. Only on a CHANGE, though: doing it
+    // every tick would be a buzz rather than a note.
     //
-    // This block used to fire on every volume CHANGE as well, on the belief that the envelope
-    // register's volume is only loaded into the channel by a trigger ("zombie mode"). That is a
-    // DMG/CGB quirk; the AGB PSG applies an NRx2 write immediately, which is why every GBA chip
-    // engine writes volume straight to the register. So the retriggers bought nothing, and they
-    // cost a great deal:
+    // What that costs, and what is done about it, because the cost is audible:
     //
-    //   - a trigger resets the duty phase, so every envelope step was a waveform discontinuity.
-    //     At full volume that hides inside the note; at low volume it IS the note, which is why
-    //     a quiet channel clicked its way through an attack or a fade.
-    //   - on CHANNEL 1 a trigger also re-arms the frequency sweep and runs its overflow check,
-    //     so a swept patch ratcheted its pitch once per envelope step. Hence channel 1 being
-    //     the worst of the four.
-    //   - on CHANNEL 4 a trigger reloads the noise LFSR, so retriggering at the control rate
-    //     made the hiss periodic - a tone at the step rate rather than noise.
+    //   - a trigger resets the duty phase, so every envelope step is a small waveform
+    //     discontinuity. Unavoidable while the step is real; 16 levels means at most a few dozen
+    //     per note.
+    //   - a trigger on CHANNEL 1 also re-arms the sweep AND RUNS ITS OVERFLOW CHECK, and an
+    //     overflow DISABLES the channel on the spot. Retriggering at the control rate therefore
+    //     had channel 1 switching itself off and back on continuously - crackle, not a click,
+    //     and far louder than the phase reset. The sweep is now programmed ONLY on a note start
+    //     and held at zero for volume-only retriggers, which is also where a sweep belongs
+    //     musically. That is why channel 1 was the worst of the four.
+    //   - a trigger on CHANNEL 4 reloads the noise LFSR. Retriggering makes the hiss repeat at
+    //     the step rate, which is the price of a software envelope on that channel.
     //
-    // If envelopes ever go flat on real hardware, this define is the one line to put back.
-    #define PSG_VOL_NEEDS_RETRIGGER 0
+    // Channel 3's level lives in wave RAM and applies immediately, so it is excluded.
+    #define PSG_VOL_NEEDS_RETRIGGER 1
     {
         static uint8_t lastOn = 0;
         static uint8_t lastVol[4] = { 0, 0, 0, 0 };
@@ -975,7 +979,13 @@ static void synth_tick(void)
             if (!start && !g_chLevel[c]) continue;
 
             switch (c) {
-            case 0: psg_sq_trigger(PSG_CH1, period_for(pitch1, 0)); break;
+            case 0:
+                // Arm the configured sweep only when the note begins. On a volume-only retrigger
+                // the sweep is held off, so the overflow check cannot disable the channel.
+                if (start) psg_sq_sweep((uint8_t)sweepShift, p->sweepDir, p->sweepTime);
+                else       psg_sq_sweep(0, 0, 0);
+                psg_sq_trigger(PSG_CH1, period_for(pitch1, 0));
+                break;
             case 1: psg_sq_trigger(PSG_CH2, period_for(pitch2, 0)); break;
             case 2: psg_wave_trigger(period_for(pitch3, 12)); break;
             default: psg_noise_trigger(); break;
@@ -985,9 +995,10 @@ static void synth_tick(void)
         if (p->drumMode) {
             // The wave channel needs a trigger only when a drum STARTS: its level lives in
             // wave RAM and in SOUND3CNT_H, both of which apply immediately, so unlike the
-            // squares it does not need retriggering on every volume step.
+            // squares it does not need retriggering on every volume step. The NOISE drum does -
+            // same rule as the melodic channels, or its decay never happens.
             uint8_t v1 = (uint8_t)(((g_drumEnv[1] >> 12) * g_drumLvl[1]) / 15);
-            if (v1 && !lastDrum[1]) psg_noise_trigger();   // when the hit STARTS, not per step
+            if (v1 && v1 != lastDrum[1]) psg_noise_trigger();
             lastDrum[1] = v1;
         }
     }

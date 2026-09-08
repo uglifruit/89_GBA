@@ -113,22 +113,23 @@ void psg_enable(uint8_t maskL, uint8_t maskR)
 // written here IS the instantaneous level. Length is left disabled so the note sustains until
 // we say otherwise.
 //
-// VOLUME 0 SETS THE DIRECTION BIT, AND THAT IS NOT COSMETIC.
+// THE ENVELOPE DIRECTION BIT IS ALWAYS SET, AND THAT IS NOT COSMETIC.
 //
-// The DAC of a PSG channel is live only while the top five bits of NRx2 - volume and direction
-// together - are non-zero. Writing a plain zero therefore does two things at once: it silences
-// the channel, which is what we asked for, and it switches the DAC off, which DISABLES the
-// channel. Turning the DAC back on does not re-enable it; only a trigger does. So a note that
-// decayed to a true zero left the channel dead, and everything after it depended on the next
-// trigger landing perfectly.
+// Two hardware rules meet here. First, a channel's DAC is live only while the top five bits of
+// NRx2 - volume and direction together - are non-zero, so a plain zero does not merely silence
+// the channel, it switches the DAC off and DISABLES the channel. Turning the DAC back on does
+// not re-enable it; only a trigger does. Second, "zombie mode": CHANGING the direction bit while
+// the channel plays makes the hardware recompute the volume as 16 - volume.
 //
-// Direction = 1 with step = 0 keeps the DAC alive at volume 0. The hardware envelope stays off
-// (period 0 disables it), the output is exactly as silent, and the channel is still armed - so a
-// retrigger from silence is instant instead of being a recovery.
+// So the bit is set unconditionally rather than only at volume 0. Always set means the DAC never
+// switches off and the direction never changes, so neither rule can fire. The envelope period
+// stays 0, which leaves the hardware envelope disabled, so the value written here is still the
+// instantaneous level and nothing creeps. Length is left disabled so a note sustains until we
+// say otherwise.
 void psg_sq_voice(int ch, uint8_t duty, uint8_t vol)
 {
     uint16_t v = (uint16_t)(((vol & 0xFu) << 12) | ((duty & 0x3u) << 6));
-    if (!(vol & 0xFu)) v |= (1u << 11);        // silent, but the DAC stays on
+    v |= (1u << 11);                           // see above: always set, never toggled
     if (ch == PSG_CH1) REG_SOUND1CNT_H = v;
     else               REG_SOUND2CNT_L = v;
 }
@@ -215,11 +216,8 @@ void psg_wave_trigger(uint16_t period) { REG_SOUND3CNT_X = (uint16_t)((period & 
 // ---- channel 4, noise ----
 void psg_noise_voice(uint8_t vol)
 {
-    // Direction bit at volume 0, for the reason spelled out over psg_sq_voice: a bare zero
-    // switches the DAC off and takes the channel with it.
-    uint16_t v = (uint16_t)((vol & 0xFu) << 12);
-    if (!(vol & 0xFu)) v |= (1u << 11);
-    REG_SOUND4CNT_L = v;
+    // Direction bit, for the reason spelled out over psg_sq_voice.
+    REG_SOUND4CNT_L = (uint16_t)(((vol & 0xFu) << 12) | (1u << 11));
 }
 
 static uint8_t g_noiseCtl = 0;
