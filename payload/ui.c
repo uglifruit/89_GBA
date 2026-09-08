@@ -1028,6 +1028,7 @@ static void draw_mem_page(void)
         } else {
             if (g_xferResult == LINK_RESULT_OK)         text(x0, by + 14, "DONE", COL_OK, 1);
             else if (g_xferResult == LINK_RESULT_EMPTY) text(x0, by + 14, "SLOT IS EMPTY", COL_WAIT, 1);
+            else if (g_xferResult == LINK_RESULT_BAD)   text(x0, by + 14, "BAD DATA - NOT LOADED", COL_WAIT, 1);
         }
     }
 }
@@ -1263,7 +1264,9 @@ void ui_frame(void)
     if (g_loadReady) {
         g_loadReady = 0;
         const Patch *in = (const Patch *)g_patchBuf;
-        if (synth_patch_valid(in)) {
+        if (!synth_patch_valid(in)) {
+            g_xferResult = LINK_RESULT_BAD;
+        } else {
             // Byte loop, not a struct assignment: GCC turns `g_patch = *in` into a call to
             // memcpy, which -nostdlib cannot resolve. The tripwire caught it on the first build.
             uint8_t *dst = (uint8_t *)&g_patch;

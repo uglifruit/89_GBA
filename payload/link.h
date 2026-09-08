@@ -67,6 +67,10 @@ void link_set_buttons(uint16_t b);
 #define LINK_RESULT_IDLE  0
 #define LINK_RESULT_OK    1
 #define LINK_RESULT_EMPTY 2
+// The bytes arrived but were not a patch. Worth its own code: a host/GBA disagreement about the
+// wire layout delivered 256 zeroes, the magic check quietly threw them away, and the page still
+// said OK - so a load that changed nothing looked exactly like a load that had nothing to change.
+#define LINK_RESULT_BAD   3
 
 extern volatile uint8_t g_xferState;                       // LINK_XFER_*
 extern volatile uint8_t g_xferSlot;

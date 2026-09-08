@@ -204,6 +204,26 @@ and the family is worth checking against first whenever a control seems dead at 
 
 Per-channel mixer level is fine and always was: `lv == 0` forces the output to zero explicitly.
 
+## Patch storage
+
+Sixteen 256-byte slots in the Workshop's last flash sector, one byte per link word in either
+direction, each byte carrying its own index so a lost word leaves a hole the receiver can see.
+
+- **The WHOLE slot is sent, zero-padded past the end of the `Patch`.** The host cannot know how
+  big a `Patch` is, so a complete transfer is "every byte of the slot seen" and nothing else.
+  Sending only `sizeof(Patch)` left the tail permanently unseen, so the host never committed,
+  never acknowledged, and the GBA resent for ever — which also monopolised the upstream channel
+  and froze the button reports.
+- **`gba_proto.h` is the authority on where a byte sits in the word, and the two directions do
+  not use the same place.** Upstream `GBA_UP_PATCH` is index `[15:8]`, value `[7:0]`; downstream
+  `GBA_OP_PATCH` is index `[23:16]`, value `[15:8]`. The host once packed the downstream value
+  into `[7:0]`, so every LOAD delivered 256 zeroes; the GBA's magic check threw them away and the
+  page still reported DONE, because `PATCH_DONE` had arrived exactly as expected. **A load that
+  changes nothing and a load with nothing to change now look different** — `LINK_RESULT_BAD`
+  prints "BAD DATA - NOT LOADED".
+- A save is self-healing without a retransmit protocol: the GBA repeats the whole block until the
+  host acks, and the host commits only a block whose seen-bitmap is complete.
+
 ## Payload UI rules (learned the hard way, all of them)
 
 1. **NEVER ERASE THEN DRAW.** Every flickering region had the same shape: clear a box to the

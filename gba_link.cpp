@@ -142,8 +142,14 @@ void gba_link_core1(const uint8_t *payload, uint32_t payload_size)
                 // second; the inputs hold their last value, which is exactly what you want while
                 // the instrument is being reconfigured anyway.
                 if (txPos < txLen) {
+                    // BYTE VALUE AT [15:8], NOT [7:0]. gba_proto.h is explicit about the layout
+                    // and the GBA decodes it from [15:8]; packing it into [7:0] here meant every
+                    // LOAD delivered 256 zero bytes. The GBA then rejected the magic and left the
+                    // patch untouched, and because PATCH_DONE still arrived the page reported a
+                    // clean load that had changed nothing.
                     word = gba_control_pack(GBA_OP_PATCH,
-                                            ((uint32_t)txPos << 16) | patchBuf[txPos]);
+                                            ((uint32_t)txPos << 16)
+                                          | ((uint32_t)patchBuf[txPos] << 8));
                     txPos++;
                 } else {
                     word = gba_control_pack(GBA_OP_PATCH_DONE, (uint32_t)txSlot);
