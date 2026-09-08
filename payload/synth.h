@@ -37,7 +37,9 @@ extern const char *src_name[SRC_COUNT];
 #define DEST_ORNRATE 10
 #define DEST_SCALE   11    // global: walks the scale list
 #define DEST_KEY     12    // global: transposes the root
-#define DEST_COUNT   13
+#define DEST_ATTACK  13    // per-voice
+#define DEST_RELEASE 14    // per-voice
+#define DEST_COUNT   15
 
 extern const char *dest_name[DEST_COUNT];
 
@@ -67,7 +69,16 @@ extern const char *trig_name[TRIG_COUNT];
 #define ACT_ORN_DN   14
 #define ACT_SEMI_UP  15
 #define ACT_SEMI_DN  16
-#define ACT_COUNT    17
+// Appended rather than inserted, so a stored patch's button indices keep their meaning.
+#define ACT_DUTY_BOTH 17   // cycles both squares together
+#define ACT_SWEEP     18   // cycles channel 1's sweep time
+#define ACT_ORN1      19   // select ornament slot n on the melodic pair (channels 1 and 2)
+#define ACT_ORN2      20
+#define ACT_ORN3      21
+#define ACT_ORN4      22
+#define ACT_ORN5      23
+#define ACT_ORN6      24
+#define ACT_COUNT     25
 
 extern const char *act_name[ACT_COUNT];
 

@@ -33,7 +33,7 @@ const char *btn_name[BTN_SLOTS] = { "A", "B", "L", "R", "UP", "DOWN", "LEFT", "R
 
 const char *dest_name[DEST_COUNT] = {
     "---", "PITCH", "LEVEL", "DUTY", "DETUNE", "GLIDE", "DECAY",
-    "SWEEP", "N PITCH", "ORNMNT", "ORNRATE", "SCALE", "KEY"
+    "SWEEP", "N PITCH", "ORNMNT", "ORNRATE", "SCALE", "KEY", "ATTACK", "RELEASE"
 };
 const char *src_name[SRC_COUNT] = { "CV 1", "CV 2", "AUD 1", "AUD 2", "MAIN", "KNOB X", "KNOB Y" };
 const char *trig_name[TRIG_COUNT] = { "PU2", "SW", "BTN" };
@@ -68,7 +68,9 @@ static const uint16_t SCALE_MASK[SCALE_BUILTIN] = {
 const char *act_name[ACT_COUNT] = {
     "---", "TRIGGER", "HOLD", "OCT +", "OCT -", "DETUNE +", "DETUNE -",
     "DUTY 1", "DUTY 2", "CH1 ON/OFF", "CH2 ON/OFF", "CH3 ON/OFF", "CH4 ON/OFF",
-    "ORNMNT +", "ORNMNT -", "SEMI +", "SEMI -"
+    "ORNMNT +", "ORNMNT -", "SEMI +", "SEMI -",
+    "DUTY BOTH", "SWEEP TIME",
+    "ORN SLOT 1", "ORN SLOT 2", "ORN SLOT 3", "ORN SLOT 4", "ORN SLOT 5", "ORN SLOT 6"
 };
 
 const char *drum_src_name[DRUM_SRC_COUNT] = { "AUD 1", "AUD 2", "CV 1", "CV 2", "PU 2", "SWITCH" };
@@ -201,39 +203,66 @@ void synth_default_patch(void)
     p->magic   = PATCH_MAGIC;
     p->version = PATCH_VERSION;
 
+    // ---- the showcase patch --------------------------------------------------------------------
+    // A hard-panned square pair with a shimmer over the top, playable from the module's own
+    // switch with nothing patched. It is deliberately a demonstration rather than a blank slate:
+    // every jack, knob and button on the panel does something audible from the first note.
+
     for (int c = 0; c < 4; c++) {
         Channel *ch = &p->ch[c];
-        ch->pan   = (c == 0) ? PAN_BOTH : PAN_OFF;   // one clean voice to start
         ch->level = 15;
         ch->semi  = 0;
-        ch->atk   = 0;
+        ch->atk   = 2;
         ch->dec   = 6;
-        ch->sus   = 12;
-        ch->rel   = 5;
+        ch->sus   = 13;
+        ch->rel   = 6;
         ch->glide = 0;
-        ch->trig  = (1u << TRIG_PU2) | (1u << TRIG_SW) | (1u << TRIG_BTN);
+        // The switch and a mapped button. Pulse In 2 is deliberately NOT armed: the point of the
+        // default is that it plays with nothing patched at all.
+        ch->trig  = (1u << TRIG_SW) | (1u << TRIG_BTN);
         ch->orn   = ORN_OFF;
+        ch->pan   = PAN_OFF;
     }
+
+    // Channel 1: left, 50% duty, quick attack, quick portamento.
+    p->ch[0].pan   = PAN_L;
+    p->ch[0].atk   = 2;      // 10 ms
+    p->ch[0].glide = 3;      // a fast slide between notes
+
+    // Channel 2: right, 25% duty, slow attack, no portamento. The pair arrives at different
+    // times and from different sides, which is most of why it sounds wide.
+    p->ch[1].pan   = PAN_R;
+    p->ch[1].atk   = 8;      // 250 ms
+    p->ch[1].glide = 0;
+
+    // Channel 3: the shimmer. A sine on a permanent octave trill, sitting under the Main knob.
+    p->ch[2].pan   = PAN_BOTH;
+    p->ch[2].level = 7;      // mid, so the Main knob can take it either way
+    p->ch[2].orn   = 5;      // slot 5, the octave trill
+    p->ch[2].atk   = 3;
+    p->ch[2].rel   = 7;
+
+    p->ch[3].pan   = PAN_OFF;   // noise off; the DRUM page is where it earns its place
 
     p->duty[0]    = PSG_DUTY_50;
     p->duty[1]    = PSG_DUTY_25;
-    p->detune     = 4;
-    p->waveSel    = 0;
+    p->detune     = 2;          // 1/16 semitone units: a touch over ten cents, so the pair beats
+    p->waveSel    = 0;          // SINE
     p->noiseDiv   = 3;
     p->noiseShift = 4;
     p->noiseWidth = 0;
     p->retrig     = 1;
-    p->sweepTime  = 0;
-    p->sweepDir   = 0;
-    p->sweepShift = 0;
+    p->sweepTime  = 0;          // off until the R button brings it in
+    p->sweepDir   = 1;          // downward
+    p->sweepShift = 3;          // enough depth to hear when it is switched on
     p->octave     = 0;
     p->masterL    = 7;
     p->masterR    = 7;
-    p->ratio      = 2;                        // 100%
-    p->baseNote   = 36;                       // 0 V = C2
+    p->ratio      = 2;          // 100%
+    p->baseNote   = 36;         // 0 V = C2
     p->tuneCents  = 0;
     p->key        = 0;
-    p->scale      = 0;                        // chromatic: quantiser off
+    p->scale      = 0;          // chromatic: quantiser off
     p->drumMode   = 0;
     p->drumThresh = 6;
 
@@ -243,46 +272,54 @@ void synth_default_patch(void)
     p->cvScale  = 455;
     p->cvOffset = 0;
 
+    // ---- the modulation matrix -------------------------------------------------------------
+    // Unused sources are left unassigned on purpose: nothing should move that you did not patch.
     for (int s = 0; s < SRC_COUNT; s++) { p->mod[s].dest = DEST_NONE; p->mod[s].depth = 0;
                                           p->mod[s].chMask = 0xF; }
-    p->mod[SRC_CV1].dest  = DEST_DUTY;   p->mod[SRC_CV1].depth  = 40; p->mod[SRC_CV1].chMask = 0x3;
-    p->mod[SRC_CV2].dest  = DEST_PITCH;  p->mod[SRC_CV2].depth  = 32; p->mod[SRC_CV2].chMask = 0xF;
-    p->mod[SRC_AUD1].dest = DEST_DETUNE; p->mod[SRC_AUD1].depth = 32; p->mod[SRC_AUD1].chMask = 0x2;
-    p->mod[SRC_AUD2].dest = DEST_LEVEL;  p->mod[SRC_AUD2].depth = 40; p->mod[SRC_AUD2].chMask = 0x8;
 
-    // Preset ornaments, editable like any other. Two arpeggios, an octave figure, a trill, a
-    // rising octave run and a wide fifth-and-octave sweep.
+    p->mod[SRC_CV2].dest   = DEST_PITCH;   p->mod[SRC_CV2].depth  = 32;  // unity 1V/oct
+    p->mod[SRC_CV2].chMask = 0xF;
+    p->mod[SRC_MAIN].dest  = DEST_LEVEL;   p->mod[SRC_MAIN].depth = 64;  // Main knob rides ch3
+    p->mod[SRC_MAIN].chMask = 0x4;
+    p->mod[SRC_X].dest     = DEST_ATTACK;  p->mod[SRC_X].depth    = 64;  // both envelopes at once
+    p->mod[SRC_X].chMask   = 0xF;
+    p->mod[SRC_Y].dest     = DEST_RELEASE; p->mod[SRC_Y].depth    = 64;
+    p->mod[SRC_Y].chMask   = 0xF;
+
+    // ---- ornaments ---------------------------------------------------------------------------
+    // Slots 1-4 are what the D-pad selects; slot 5 is channel 3's permanent trill.
     static const int8_t seed[ORN_SLOTS][ORN_STEPS] = {
-        { 0, 4, 7, 12, 7, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },       // major arp
-        { 0, 3, 7, 12, 7, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },       // minor arp
-        { 0, 12, 0, 12, 0, 12, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0 },    // octave jump
-        { 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0 },        // trill
-        { 0, 12, 24, 12, 0, -12, 0, 12, 0, 0, 0, 0, 0, 0, 0, 0 },  // octave run
-        { 0, 7, 12, 19, 24, 19, 12, 7, 0, 0, 0, 0, 0, 0, 0, 0 },   // fifths and octaves
+        {   0,  4,  7,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },   // 1 major chord, looping
+        {   0,  3,  7,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },   // 2 minor chord, looping
+        { -12, 12,  0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },   // 3 octave drop and leap, once
+        {  -3, -2, -1,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },   // 4 chromatic run up, once
+        {   0, 12,  0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 },   // 5 octave trill, looping
+        {   0,  7, 12, 19, 24, 19, 12, 7, 0, 0, 0, 0, 0, 0, 0, 0 },// 6 fifths and octaves
     };
-    static const uint8_t seedLen[ORN_SLOTS]  = { 6, 6, 4, 4, 8, 8 };
-    static const uint8_t seedRate[ORN_SLOTS] = { 4, 4, 5, 6, 4, 3 };
+    static const uint8_t seedLen[ORN_SLOTS]  = { 3, 3, 3, 4, 2, 8 };
+    static const uint8_t seedRate[ORN_SLOTS] = { 4, 4, 5, 6, 6, 3 };
+    static const uint8_t seedMode[ORN_SLOTS] = { 0, 0, 1, 1, 0, 0 };   // 1 = one-shot
     for (int o = 0; o < ORN_SLOTS; o++) {
         p->orn[o].len  = seedLen[o];
         p->orn[o].rate = seedRate[o];
-        p->orn[o].mode = 0;
+        p->orn[o].mode = seedMode[o];
         for (int i = 0; i < ORN_STEPS; i++) p->orn[o].step[i] = seed[o][i];
     }
 
-    p->btnAct[0] = ACT_TRIGGER;      // A
-    p->btnAct[1] = ACT_HOLD;         // B
-    p->btnAct[2] = ACT_DUTY2;        // L
-    p->btnAct[3] = ACT_DUTY1;        // R
-    p->btnAct[4] = ACT_OCT_UP;       // Up
-    p->btnAct[5] = ACT_OCT_DN;       // Down
-    p->btnAct[6] = ACT_DETUNE_DN;    // Left
-    p->btnAct[7] = ACT_DETUNE_UP;    // Right
+    // ---- the panel ----------------------------------------------------------------------------
+    p->btnAct[0] = ACT_TRIGGER;    // A
+    p->btnAct[1] = ACT_HOLD;       // B
+    p->btnAct[2] = ACT_DUTY_BOTH;  // L
+    p->btnAct[3] = ACT_SWEEP;      // R
+    p->btnAct[4] = ACT_ORN1;       // Up     major chord
+    p->btnAct[5] = ACT_ORN2;       // Down   minor chord
+    p->btnAct[6] = ACT_ORN3;       // Left   octave drop and leap
+    p->btnAct[7] = ACT_ORN4;       // Right  chromatic run
 
-    // Somewhere to start rather than four empty grids.
-    p->userScale[0] = 0x0AB5;        // major
-    p->userScale[1] = 0x05AD;        // minor
-    p->userScale[2] = 0x0295;        // pentatonic
-    p->userScale[3] = 0x0FFF;        // chromatic
+    p->userScale[0] = 0x0AB5;      // major
+    p->userScale[1] = 0x05AD;      // minor
+    p->userScale[2] = 0x0295;      // pentatonic
+    p->userScale[3] = 0x0FFF;      // chromatic
 
     p->drumMap[DRUM_SRC_AUD1] = 1;   // kick
     p->drumMap[DRUM_SRC_AUD2] = 2;   // snare
@@ -464,6 +501,23 @@ static void synth_tick(void)
                 p->ch[c].semi = (int8_t)clampi(p->ch[c].semi + d, -24, 24);
             break;
         }
+        case ACT_DUTY_BOTH:
+            if (edg) { p->duty[0] = (uint8_t)((p->duty[0] + 1) & 3);
+                       p->duty[1] = (uint8_t)((p->duty[1] + 1) & 3); }
+            break;
+        case ACT_SWEEP:
+            if (edg) p->sweepTime = (uint8_t)((p->sweepTime + 1) & 7);
+            break;
+        case ACT_ORN1: case ACT_ORN2: case ACT_ORN3:
+        case ACT_ORN4: case ACT_ORN5: case ACT_ORN6: {
+            // The MELODIC PAIR only. Channel 3 keeps whatever it was given, which is what lets
+            // it hold a steady shimmer while the lead switches figures underneath it.
+            if (!edg) break;
+            uint8_t slot = (uint8_t)(act - ACT_ORN1 + 1);
+            p->ch[0].orn = slot;
+            p->ch[1].orn = slot;
+            break;
+        }
         default: break;
         }
     }
@@ -477,6 +531,8 @@ static void synth_tick(void)
     int32_t modDuty[4]  = { 0, 0, 0, 0 };
     int32_t modGlide[4] = { 0, 0, 0, 0 };
     int32_t modDecay[4] = { 0, 0, 0, 0 };
+    int32_t modAtk[4]   = { 0, 0, 0, 0 };
+    int32_t modRel[4]   = { 0, 0, 0, 0 };
     uint8_t ornForce[4] = { 0, 0, 0, 0 };     // ornament slot forced on by a mapping
     int32_t modDetune = 0, modSweep = 0, modNPitch = 0, modOrnRate = 0;
     int32_t modScale = 0, modKey = 0;
@@ -516,6 +572,8 @@ static void synth_tick(void)
         case DEST_DUTY:  for (int c = 0; c < 4; c++) if (mask & (1u << c)) modDuty[c]  += v; break;
         case DEST_GLIDE: for (int c = 0; c < 4; c++) if (mask & (1u << c)) modGlide[c] += v; break;
         case DEST_DECAY: for (int c = 0; c < 4; c++) if (mask & (1u << c)) modDecay[c] += v; break;
+        case DEST_ATTACK:  for (int c = 0; c < 4; c++) if (mask & (1u << c)) modAtk[c] += v; break;
+        case DEST_RELEASE: for (int c = 0; c < 4; c++) if (mask & (1u << c)) modRel[c] += v; break;
         case DEST_DETUNE:  modDetune  += v; break;
         case DEST_SWEEP:   modSweep   += v; break;
         case DEST_NPITCH:  modNPitch  += v; break;
@@ -612,9 +670,14 @@ static void synth_tick(void)
             edge   |= trigEdge[t];
         }
 
+        // Attack and release are modulated as INDICES into the time table, so a knob sweeps the
+        // stage time the same way the editor's own control does.
+        int32_t atkIx = clampi((int32_t)ch->atk + (modAtk[c] >> 3), 0, 15);
+        int32_t relIx = clampi((int32_t)ch->rel + (modRel[c] >> 3), 0, 15);
+
         if (edge) {
-            g_envState[c] = (ch->atk == 0) ? ENV_DEC : ENV_ATK;
-            if (ch->atk == 0)   g_chEnv[c] = 65535;
+            g_envState[c] = (atkIx == 0) ? ENV_DEC : ENV_ATK;
+            if (atkIx == 0)     g_chEnv[c] = 65535;
             else if (p->retrig) g_chEnv[c] = 0;
             g_chNoteOn[c]  = 1;
             g_chOrnStep[c] = 0;
@@ -628,7 +691,7 @@ static void synth_tick(void)
 
         switch (g_envState[c]) {
         case ENV_ATK: {
-            int32_t e = (int32_t)g_chEnv[c] + ENV_INC[ch->atk];
+            int32_t e = (int32_t)g_chEnv[c] + ENV_INC[atkIx];
             if (e >= 65535) { e = 65535; g_envState[c] = ENV_DEC; }
             g_chEnv[c] = (uint16_t)e;
             break;
@@ -641,7 +704,7 @@ static void synth_tick(void)
         }
         case ENV_SUS: g_chEnv[c] = (uint16_t)susLevel; break;
         case ENV_REL: {
-            int32_t e = (int32_t)g_chEnv[c] - ENV_INC[ch->rel];
+            int32_t e = (int32_t)g_chEnv[c] - ENV_INC[relIx];
             if (e <= 0) { e = 0; g_envState[c] = ENV_IDLE; g_chNoteOn[c] = 0; }
             g_chEnv[c] = (uint16_t)e;
             break;
@@ -717,7 +780,9 @@ static void synth_tick(void)
         // trigger below is skipped while the volume is 0, so a slow attack would never sound.
         if (vol == 0 && g_envState[c] != ENV_IDLE) vol = 1;
 
-        int32_t lv  = clampi((int32_t)p->ch[c].level + (modLevel[c] >> 4), 0, 15);
+        // >>3, not >>4: at full depth that is the whole 0..15 span, so a knob mapped to LEVEL
+        // really does run a channel from silent to full rather than nudging it by a quarter.
+        int32_t lv  = clampi((int32_t)p->ch[c].level + (modLevel[c] >> 3), 0, 15);
         int32_t out = ((int32_t)vol * lv) / 15;              // constant divisor
         if (vol && lv && out == 0) out = 1;
         if (p->ch[c].pan == PAN_OFF || lv == 0) out = 0;
