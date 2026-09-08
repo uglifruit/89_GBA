@@ -161,6 +161,10 @@ volume steps, is sidestepped by scaling the wavetable itself rather than using t
 register. No Direct Sound and no DMA: real sample playback would need a timer, the FIFOs, and
 sample data in an already six-second payload.
 
+**Channel 3's level is applied by scaling its wavetable, not by its volume register.** The
+hardware register offers only mute / 25 / 50 / 100 %, which is far too coarse for an envelope —
+scaling the samples gives a full sixteen steps, the same trick the drum engine uses.
+
 **The noise channel tracks pitch, but only in octaves.** Its frequency is
 `524288 / r / 2^(s+1)`, so the shift field steps by a factor of two and nothing finer — the
 eight divider ratios do subdivide an octave, but unevenly, so there is no honest chromatic

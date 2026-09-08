@@ -426,6 +426,8 @@ static uint8_t  g_drumShift  = 0;
 static uint8_t  g_drumWidth  = 0;
 static uint8_t  g_drumWave   = 0;
 static uint8_t  g_drumAmp    = 0xFF;   // last amplitude written to wave RAM
+static uint8_t  g_waveAmp    = 0xFF;   // same, for the melodic wave channel
+static uint8_t  g_waveSel    = 0xFF;
 
 static void drum_fire(int preset)
 {
@@ -842,10 +844,27 @@ static void synth_tick(void)
         psg_wave_voice(PSG_WAVE_MUTE);
         g_drumAmp = 0xFF;
     } else {
-        uint8_t wv = (g_chLevel[2] == 0) ? PSG_WAVE_MUTE
-                   : (g_chLevel[2] <= 5) ? PSG_WAVE_25
-                   : (g_chLevel[2] <= 10) ? PSG_WAVE_50 : PSG_WAVE_100;
-        psg_wave_voice(wv);
+        // SIXTEEN AMPLITUDE STEPS, NOT FOUR.
+        //
+        // SOUND3CNT_H offers only mute / 25 / 50 / 100 %, and mapping a 0-15 envelope onto that
+        // makes most of the envelope invisible: a sustain of 13 never leaves the 100% band, so a
+        // decay from full does nothing audible, and sustain 11 through 15 are the same value. The
+        // release did move, but through three coarse jumps, which reads as stopping rather than
+        // decaying.
+        //
+        // So the amplitude is applied by scaling the wavetable itself, exactly as the drum engine
+        // already does. The channel sits at 100% of a scaled waveform instead of at one of four
+        // volumes of a fixed one. Only reloaded when the level or the waveform actually changes.
+        if (g_chLevel[2] != g_waveAmp || p->waveSel != g_waveSel) {
+            g_waveAmp = g_chLevel[2];
+            g_waveSel = p->waveSel;
+            if (g_waveAmp == 0) {
+                psg_wave_voice(PSG_WAVE_MUTE);
+            } else {
+                psg_wave_load_scaled(psg_wave_preset[p->waveSel % PSG_WAVE_PRESETS], g_waveAmp);
+                psg_wave_voice(PSG_WAVE_100);
+            }
+        }
         psg_wave_period(period_for(pitch3, 12));       // wave is an octave down for the same n
     }
 
@@ -856,6 +875,7 @@ static void synth_tick(void)
         if (lastDrumMode && !p->drumMode) {
             psg_wave_load(psg_wave_preset[p->waveSel % PSG_WAVE_PRESETS]);
             g_drumAmp = 0xFF;
+            g_waveAmp = 0xFF;      // the melodic side must reload too: wave RAM holds a drum body
         }
         lastDrumMode = p->drumMode;
     }

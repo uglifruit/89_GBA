@@ -185,6 +185,14 @@ Both were the same shape — a value that says zero and does not mean it.
 Per-channel mixer level is fine and always was: `lv == 0` forces the output to zero explicitly,
 and the anti-silence floor beside it only fires when `lv` is non-zero.
 
+A third of the same family: **the melodic wave channel had four amplitude steps, not sixteen.**
+`SOUND3CNT_H` offers only mute / 25 / 50 / 100 %, so a 0-15 envelope mapped onto it made most of
+the envelope invisible — a sustain of 13 never left the 100% band, sustains 11 to 15 were
+identical, and the release moved in three coarse jumps that read as stopping rather than
+decaying. It now scales the wavetable, exactly as the drum engine already did. **If a control on
+channel 3 seems not to do anything, suspect this first**: its hardware volume register is far
+coarser than every other control on the instrument.
+
 ## Payload UI rules (learned the hard way, all of them)
 
 1. **NEVER ERASE THEN DRAW.** Every flickering region had the same shape: clear a box to the
