@@ -139,13 +139,20 @@ C-compatible (payload is C, firmware is C++): plain `#define` and `static inline
    in `synth.c` records the finding; it is 1 and should stay 1.
    Retriggering is not free, and two of its three costs are fixable:
    - it resets the duty phase, so each step is a small discontinuity. Unavoidable.
-   - **on channel 1 it re-runs the sweep's overflow check, and an overflow disables the channel
-     outright** — so retriggering at the control rate had channel 1 switching itself off and on
-     continuously. That crackle, not the phase reset, is why channel 1 was much the worst. The
-     sweep is now armed once per note, at the first trigger that can actually be heard, and held
-     at zero for every volume step after it. **Sweep and a software envelope are not fully
-     compatible here**: each volume retrigger disarms the sweep, so a sustained level is where a
-     sweep gets to run.
+   - **on channel 1 it touches the sweep, which has two ways to silence the channel outright.**
+     A trigger re-runs the sweep's overflow check, and an overflow disables the channel — so
+     leaving a sweep programmed had channel 1 cutting in and out at the control rate. The sweep
+     is now armed once per note, at the first trigger that can actually be heard, and reduced to
+     zero shift and zero time for every volume step after it.
+     **When you reduce it, NEVER clear the negate (direction) bit.** Clearing negate after even
+     one negate-mode calculation has been made since the last trigger disables the channel
+     immediately. The patch defaults to a downward sweep and a trigger with a non-zero shift
+     performs a calculation on the spot, so a bare `psg_sq_sweep(0, 0, 0)` on the next volume
+     step silenced channel 1 mid-note while every screen still showed it playing. **Setting the
+     sweep depth to zero curing a channel-1 fault is the tell for this**: with no shift there is
+     no calculation, so there is nothing to clear.
+     **Sweep and a software envelope are not fully compatible here** either: each volume
+     retrigger reduces the sweep, so a sustained level is where a sweep gets to run.
    - on channel 4 it reloads the noise LFSR, making hiss repeat at the step rate.
 4. **Envelopes are software**, updated at ~1 kHz off Timer 0. The hardware envelope runs once
    per trigger and cannot sustain-then-release, which is the exact shape a gate input needs.

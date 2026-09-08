@@ -998,7 +998,17 @@ static void synth_tick(void)
                     psg_sq_sweep((uint8_t)sweepShift, p->sweepDir, p->sweepTime);
                     swArmed = 1;
                 } else {
-                    psg_sq_sweep(0, 0, 0);
+                    // SHIFT AND TIME TO ZERO, BUT NEVER THE DIRECTION BIT.
+                    //
+                    // Clearing the sweep's negate bit after even one negate-mode calculation has
+                    // been made since the last trigger DISABLES THE CHANNEL IMMEDIATELY. It is a
+                    // real, documented quirk and it is not a quiet one: the patch defaults to a
+                    // downward sweep, a trigger with a non-zero shift performs a calculation on
+                    // the spot, and the very next volume step wrote a bare zero here - so
+                    // channel 1 would go silent mid-note while every screen still showed it
+                    // playing. Setting the depth to zero cured it, which is the tell: with no
+                    // shift no calculation is made and there is nothing to clear.
+                    psg_sq_sweep(0, p->sweepDir, 0);
                 }
                 psg_sq_trigger(PSG_CH1, period_for(pitch1, 0));
                 break;
