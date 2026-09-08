@@ -124,7 +124,7 @@ holds, so latch a drone in PLAY and then go and edit it.
 | D-pad alone | move the cursor (row, and on grid pages a column) |
 | **A** + Up/Down | change the value |
 | **A** + Left/Right | change coarsely, or the row's second field |
-| **SELECT** + Left/Right | change page |
+| **SELECT** + Left/Right | change page — hold it down to run through them quickly |
 | **START** | back to the performance screen |
 
 ### The eleven pages
@@ -139,7 +139,7 @@ holds, so latch a drone in PLAY and then go and edit it.
 | **MAP** | modulation matrix: seven sources × destination × amount × per-voice tickboxes |
 | **ORN** | ornaments — sixteen-step semitone sequences, edited graphically, with a loop/end marker |
 | **DRUM** | a drum sound per input; any input going high fires it. Borrows channels 3 and 4 |
-| **MEM** | sixteen patch slots on the card. A+Up saves, B+Down loads |
+| **MEM** | sixteen patch slots on the card. A+Up saves, A+Down loads |
 | **CAL** | **CV input scale and offset trim**, base note, master volume, PSG level, link mode |
 | **SET** | master tuning in cents, key, scale (19 of them), octave, user-scale editor |
 

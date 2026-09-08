@@ -170,7 +170,7 @@ envelopes slower. The tick now runs while the screen is drawn.
 ### 7f. Patches
 
 On **MEM**, the D-pad walks the sixteen slots (Left/Right one box, Up/Down a row of eight).
-**A+Up saves, B+Down loads.** The bar shows progress; the box fills once a slot holds something.
+**A+Up saves, A+Down loads.** The bar shows progress; the box fills once a slot holds something.
 
 Expect a **click** on save: erasing flash stops XIP, so the 48 kHz callback does not run for the
 few milliseconds the write takes.

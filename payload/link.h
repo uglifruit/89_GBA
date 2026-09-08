@@ -42,10 +42,12 @@ extern volatile uint32_t g_rx;           // every word, good or bad
 extern volatile uint32_t g_streamRx;     // valid stream words
 extern volatile uint32_t g_streamBad;    // words rejected by tag or check bits
 
-// Per-kind receive counters, shown on the CAL page. These exist because "the knobs do not work"
-// has at least three completely different causes that look identical from the front panel: the
-// host not sending, the words not arriving, or core 0 never updating the values in the first
-// place. Counting each kind separates them in one glance instead of one guess.
+// Per-kind receive counters. Kept, but no longer displayed: they were added to settle "the knobs
+// do not work", which has at least three completely different causes that look identical from
+// the front panel — the host not sending, the words not arriving, or core 0 never updating the
+// values in the first place. Counting each kind separated them in one glance. The fault turned
+// out to be core 0 blocked inside multicore_launch_core1(), and the counters cost three
+// increments, so they stay for the next time that question comes up.
 extern volatile uint32_t g_ctlRx;        // CONTROL words decoded, any opcode
 extern volatile uint32_t g_knobRx;       // GBA_OP_KNOB specifically
 extern volatile uint32_t g_swRx;         // GBA_OP_SWITCH specifically

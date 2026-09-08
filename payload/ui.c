@@ -52,6 +52,8 @@ static uint8_t g_degCol  = 0;      // degree cursor for the user-scale editor
 static uint8_t g_slot    = 0;      // patch slot
 static uint8_t g_repaint = 1;
 static uint8_t g_lastMode = 0xFF;
+static uint8_t g_navBlank = 0;      // stepping pages with SELECT held: body blanked, tabs live
+static int     g_tabPage  = -1;
 
 // Eleven tabs across 240 px. "CHAN" rather than "VOICE" because the page is per-channel and the
 // shorter word is what makes the row fit without abbreviating the rest into noise.
@@ -262,7 +264,9 @@ static void chan_cell(int row, int c, char *buf)
     Channel *ch = &p->ch[c & 3];
     buf[0] = 0;
 
-    if (!(CF_CHANS[row] & (1u << c))) { scopy(buf, 0, "-"); return; }
+    // [X] rather than a dash: a dash reads as "zero" or "not set yet", where the truth is that
+    // this channel has no such control at all and never will.
+    if (!(CF_CHANS[row] & (1u << c))) { scopy(buf, 0, "[X]"); return; }
 
     switch (row) {
     case CF_OUTPUT: scopy(buf, 0, pan_name[ch->pan & 3]); return;
@@ -619,8 +623,8 @@ static void edit_static(void)
         text(6, 136, "DRUMS BORROW CH3 AND CH4. SQUARES STAY FREE.", COL_DIM, 1);
     }
     if (g_page == PAGE_CAL)  text(6, 140, "GBA PSG VOICE   BY ANDY JENKINSON 2026", COL_DIM, 1);
-    if (g_page == PAGE_MEM)  text(6, 140, "D-PAD PICKS A SLOT.   A+UP SAVES.   B+DOWN LOADS.", COL_DIM, 1);
-    if (g_page == PAGE_CHAN) text(6, 148, "D-PAD MOVES   A+UP/DN VALUE   A+L/R x8", COL_DIM, 1);
+    if (g_page == PAGE_MEM)  text(6, 140, "D-PAD PICKS A SLOT.   A+UP SAVES.   A+DOWN LOADS.", COL_DIM, 1);
+    if (g_page == PAGE_CHAN) text(6, 138, "D-PAD MOVES   A+UP/DN VALUE   A+L/R x8", COL_DIM, 1);
 }
 
 // ---- graphs --------------------------------------------------------------------------------------
@@ -759,7 +763,7 @@ static void draw_mixer(void)
 // Ten rows by four columns, redrawn cell by cell. Painting the whole table on every cursor move
 // would be about 1600 rect() calls a frame, which is both slow and visibly flickery.
 #define CHAN_TOP   34
-#define CHAN_ROW   11
+#define CHAN_ROW   10      // one pixel tighter than the list pages, to free a legend line
 #define CHAN_X0    58
 #define CHAN_W     45
 
@@ -772,7 +776,7 @@ static void draw_chan_grid(void)
 
     if (!g_chanInit) {
         g_chanInit = 1;
-        rect(0, LIST_TOP - 2, SCREEN_W, 146 - LIST_TOP, COL_BG);
+        rect(0, LIST_TOP - 2, SCREEN_W, 134 - LIST_TOP, COL_BG);
         for (int c = 0; c < 4; c++) {
             ch_text(buf, c);
             text(CHAN_X0 + c * CHAN_W, LIST_TOP, buf, COL_DIM, 1);
@@ -946,14 +950,20 @@ static int g_scaleShape = -1;
 static void draw_user_scale(int x, int y)
 {
     Patch *p = &g_patch;
-    if (p->scale < SCALE_BUILTIN) return;
+    int isUser = (p->scale >= SCALE_BUILTIN);
 
-    uint16_t m = p->userScale[(p->scale - SCALE_BUILTIN) & 3];
-    int shape = (m << 8) | (g_degCol << 2) | (p->scale & 3);
+    // -2 is the "no grid" state. Returning early on a built-in scale merely stopped DRAWING the
+    // grid, which left the previous USER scale's boxes sitting on screen after you stepped past.
+    int shape = isUser ? ((p->userScale[(p->scale - SCALE_BUILTIN) & 3] << 8)
+                          | (g_degCol << 2) | (p->scale & 3))
+                       : -2;
     if (shape == g_scaleShape) return;
     g_scaleShape = shape;
 
     rect(x - 2, y - 2, 196, 22, COL_BG);
+    if (!isUser) return;
+
+    uint16_t m = p->userScale[(p->scale - SCALE_BUILTIN) & 3];
     for (int d = 0; d < 12; d++) {
         int bx = x + d * 16;
         rect(bx, y, 14, 11, (d == g_degCol) ? COL_SEL : COL_DIM);
@@ -979,7 +989,9 @@ static void draw_mem_page(void)
 
     if (!g_memInit) {
         g_memInit = 1;
-        rect(0, LIST_TOP - 2, SCREEN_W, 146 - LIST_TOP, COL_BG);
+        // Stops at 138, clear of the legend edit_static() draws at 140. Clearing to 146 took
+        // the top half of it away every time the page was entered.
+        rect(0, LIST_TOP - 2, SCREEN_W, 138 - LIST_TOP, COL_BG);
         text(14, LIST_TOP, "PATCH SLOTS", COL_DIM, 1);
         for (int i = 0; i < GBA_PATCH_SLOTS; i++) g_memCell[i] = 0xFF;
         g_memProg = -1;
@@ -1049,38 +1061,6 @@ static void edit_extras(void)
             text(14, 104, buf, COL_MID, 1);
         }
 
-        // Link traffic, by kind. STR should race, CTL should climb steadily, KNB about forty a
-        // second. If STR moves and KNB does not, the host is not sending knobs; if KNB moves and
-        // the values below sit still, the module's 48 kHz loop is not updating them.
-        static char lastTraf[48] = { 1, 0 };
-        int t = scopy(buf, 0, "STR ");
-        t = dec_at(buf, t, g_streamRx);
-        t = scopy(buf, t, "  CTL ");
-        t = dec_at(buf, t, g_ctlRx);
-        t = scopy(buf, t, "  KNB ");
-        t = dec_at(buf, t, g_knobRx);
-        t = scopy(buf, t, "  SW ");
-        dec_at(buf, t, g_swRx);
-        if (!streq(buf, lastTraf)) {
-            scopy(lastTraf, 0, buf);
-            srect(10, 116, SCREEN_W - 20, 10, COL_BG);
-            text(14, 116, buf, COL_DIM, 1);
-        }
-
-        static char lastVals[48] = { 1, 0 };
-        t = scopy(buf, 0, "K ");
-        t = dec_at(buf, t, g_knob[0]);
-        t = scopy(buf, t, " ");
-        t = dec_at(buf, t, g_knob[1]);
-        t = scopy(buf, t, " ");
-        t = dec_at(buf, t, g_knob[2]);
-        t = scopy(buf, t, "   SWPOS ");
-        dec_at(buf, t, g_switch);
-        if (!streq(buf, lastVals)) {
-            scopy(lastVals, 0, buf);
-            srect(10, 128, SCREEN_W - 20, 10, COL_BG);
-            text(14, 128, buf, COL_MID, 1);
-        }
         break;
     }
 
@@ -1119,7 +1099,10 @@ static void change_page(int delta)
     g_scroll = 0;
     g_trigCol = 0;
     g_mapCol = 0;
-    g_repaint = 1;
+    // Deliberately does NOT set g_repaint. change_page is only ever reached with SELECT held,
+    // and while SELECT is held the body is blanked and only the tab bar is redrawn — see the
+    // dispatch at the end of ui_frame. Repainting the whole page per step is what made holding
+    // SELECT+RIGHT crawl.
 }
 
 void ui_frame(void)
@@ -1167,8 +1150,7 @@ void ui_frame(void)
             // Bare D-pad walks the grid the way it looks: one box sideways, a row of eight
             // vertically. Save and load are deliberately different gestures on different
             // buttons, so neither can happen by accident while you are just looking around.
-            int hold = (g_btn & KEY_B) != 0;
-            if (!adj && !hold) {
+            if (!adj) {
                 if (steps & KEY_RIGHT) g_slot = (uint8_t)clampi(g_slot + 1, 0, GBA_PATCH_SLOTS - 1);
                 if (steps & KEY_LEFT)  g_slot = (uint8_t)clampi(g_slot - 1, 0, GBA_PATCH_SLOTS - 1);
                 if (steps & KEY_DOWN)  g_slot = (uint8_t)clampi(g_slot + 8, 0, GBA_PATCH_SLOTS - 1);
@@ -1176,7 +1158,7 @@ void ui_frame(void)
             }
             if (adj && (steps & KEY_UP) && g_xferState == LINK_XFER_NONE)
                 link_begin_save(g_slot, (const uint8_t *)&g_patch, synth_patch_bytes());
-            if (hold && (steps & KEY_DOWN) && g_xferState == LINK_XFER_NONE)
+            if (adj && (steps & KEY_DOWN) && g_xferState == LINK_XFER_NONE)
                 link_begin_load(g_slot);
 
         } else if (g_page == PAGE_MIX) {
@@ -1293,16 +1275,36 @@ void ui_frame(void)
         }
     }
 
+    // WHILE SELECT IS HELD YOU ARE NAVIGATING, NOT READING.
+    //
+    // Drawing a full page for every step made holding SELECT+RIGHT crawl: each one was a
+    // full-screen clear plus a page body, and the button repeat outran it badly. So a step blanks
+    // the body ONCE and then redraws nothing but the tab bar, which is a few dozen glyphs. The
+    // page itself is drawn when SELECT comes back up and you have arrived somewhere.
+    //
+    // Input keeps up regardless — buttons are scanned at 1 kHz from the control tick, which runs
+    // inside the drawing routines — so this is purely about not making the screen the bottleneck.
+    int selecting = g_editMode && (g_btn & KEY_SELECT);
+    if (!selecting && g_navBlank) { g_navBlank = 0; g_repaint = 1; }
+
     if (g_editMode != g_lastMode) { g_lastMode = g_editMode; g_repaint = 1; }
 
     if (g_repaint) {
         g_repaint = 0;
         invalidate();
+        g_tabPage = -1;
         if (g_editMode) edit_static(); else play_static();
     }
 
     if (g_editMode) {
-        if      (g_page == PAGE_TRIG) draw_trig_grid();
+        if (selecting) {
+            if (!g_navBlank) {
+                g_navBlank = 1;
+                rect(0, 17, SCREEN_W, HINT_Y - 19, COL_BG);
+            }
+            if (g_tabPage != g_page) { g_tabPage = g_page; draw_tabs(); }
+        }
+        else if (g_page == PAGE_TRIG) draw_trig_grid();
         else if (g_page == PAGE_MIX)  draw_mixer();
         else if (g_page == PAGE_CHAN) draw_chan_grid();
         else if (g_page == PAGE_MEM)  draw_mem_page();
