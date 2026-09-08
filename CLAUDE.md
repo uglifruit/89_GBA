@@ -119,19 +119,24 @@ C-compatible (payload is C, firmware is C++): plain `#define` and `static inline
 1. **`SOUNDCNT_X` bit 7 (master enable) must be set BEFORE any other sound register write.**
    With the master off the sound registers are not writable at all, and clearing bit 7 resets
    them. `psg_init()` does this first.
-2. **Write the envelope volume BEFORE triggering a channel.** On this DMG-derived PSG, an
-   envelope register holding volume 0 with direction 0 switches the channel's DAC off, and
-   switching the DAC back on does **not** re-enable the channel — only a trigger does. A
-   released note leaves the envelope at 0, so triggering first would arm a channel whose DAC is
-   still off: first note sounds, every note after it is silent. `synth_tick()` writes all
-   volumes and only then triggers, at the very end.
-3. **An active note's volume is floored at 1, never 0.** Volume 0 turns the DAC off, so a slow
-   attack would be silent for ever — the trigger is skipped while volume is 0, and nothing
-   fires it again afterwards. Idle still reaches a true 0.
+2. **NEVER WRITE A BARE ZERO TO AN `NRx2` ENVELOPE REGISTER.** A channel's DAC is live only
+   while the top five bits — volume *and* direction together — are non-zero, so a plain zero
+   silences the channel *and* switches its DAC off, which disables the channel outright.
+   Turning the DAC back on does not re-enable it; only a trigger does. `psg_sq_voice()` and
+   `psg_noise_voice()` therefore set the direction bit whenever the volume is 0: equally
+   silent, but the channel stays armed, so a retrigger from silence is instant rather than a
+   recovery. This single fact was behind three separate faults — sustain 0 refusing to
+   retrigger, the volume floor that existed to work around it, and the "first note sounds,
+   every note after it is silent" bug before that.
+3. **A trigger is a NOTE START, never a volume update.** The DMG only loads `NRx2`'s volume on
+   a trigger, but the **AGB applies the write immediately**, which is what every GBA chip
+   engine relies on. Retriggering each envelope step therefore bought nothing and cost:
+   a duty-phase discontinuity every step (a quiet channel clicks its way through a fade),
+   channel 1's sweep re-armed and its overflow check re-run once per step, and channel 4's
+   LFSR reloaded so hiss became a tone at the step rate. `synth.c` keeps the switch as
+   `PSG_VOL_NEEDS_RETRIGGER 0` — one line to put back if an envelope ever goes flat.
 4. **Envelopes are software**, updated at ~1 kHz off Timer 0. The hardware envelope runs once
    per trigger and cannot sustain-then-release, which is the exact shape a gate input needs.
-   If the shape ever stops working on real hardware, suspect DMG "zombie mode" — some
-   revisions do not apply an `NRx2` write until the next trigger. The AGB PSG does.
 5. **No runtime division on the GBA.** The payload links `-nostdlib`, so libgcc is absent and
    a divide by a *variable* is an undefined `__aeabi_uidiv`/`__aeabi_idivmod` at LINK time.
    This is a deliberate tripwire, and it has already caught one `% rows` in the editor. Divides
@@ -160,7 +165,8 @@ a body rather than being a square, and its period register sweeps like the squar
 weakness is that `SOUND3CNT_H` gives only four volume steps, far too coarse for a decay — so the
 amplitude is applied by **scaling the wavetable samples** (`psg_wave_load_scaled`), which gives
 sixteen steps for eight halfword writes. That is the standard Game Boy tracker trick, and it also
-means the wave channel needs **no retrigger on a volume change**, unlike the squares and noise.
+means the wave channel needs no trigger at all on a volume change — and since the retrigger came
+out of the squares and noise too, nothing on the instrument now triggers except a note start.
 
 Leaving drum mode must restore the melodic waveform: the drum engine has been overwriting wave
 RAM with scaled copies of a drum body.
@@ -169,29 +175,34 @@ RAM with scaled copies of a drum body.
 DMA1/2, a timer driving the FIFO, and sample data in a payload already taking six seconds to
 upload.
 
-## Two levels that could not reach zero
+## Levels that could not reach zero
 
-Both were the same shape — a value that says zero and does not mean it.
+All of them the same shape — a value that says zero and does not mean it. Four found so far,
+and the family is worth checking against first whenever a control seems dead at one end.
 
-1. **Sustain 0 was not silent.** The envelope volume was floored at 1 for any state that was not
-   IDLE, and a sustain of 0 decays to a true zero and then sits in SUSTAIN. The floor exists
-   because volume 0 switches the DAC off and the trigger block is skipped while the level is 0,
-   so an attack starting from zero would never fire — but that only applies while the envelope is
-   RISING. The condition is `== ENV_ATK`, not `!= ENV_IDLE`.
+1. **Sustain 0 was not silent.** The envelope volume was floored at 1 for every state that was
+   not IDLE, so a sustain of 0 decayed to a true zero and was floored straight back up. Narrowed
+   to `== ENV_ATK`, then removed outright once the DAC no longer switches off (gotcha 2) — the
+   floor's whole purpose was working around that.
 2. **Master volume 0 is not silence on this hardware.** `SOUNDCNT_L` scales by `(vol+1)/8`, so 0
    is one eighth. The per-channel enables are dropped for that side instead, which genuinely
    mutes it.
+3. **The melodic wave channel had four amplitude steps, not sixteen.** `SOUND3CNT_H` offers only
+   mute / 25 / 50 / 100 %, so a 0-15 envelope mapped onto it made most of the envelope invisible:
+   a sustain of 13 never left the 100% band, 11 to 15 were identical, and the release moved in
+   three coarse jumps that read as stopping rather than decaying. It now scales the wavetable, as
+   the drum engine already did. **If a control on channel 3 seems to do nothing, suspect this
+   first** — its hardware volume register is far coarser than anything else on the instrument.
+4. **A faded wavetable was a DC offset, not silence.** The wave DAC's centre lies *between*
+   samples 7 and 8, so scaling a table toward 8 left every quiet table half a step above centre
+   — a fixed offset that did not shrink with the envelope. The channel went inaudible well
+   before it went quiet, and the mute at the bottom removed the offset in one step: a click
+   arriving a second or so after the note had seemingly already stopped. `scale_nib()` now scales
+   about 7.5 and splits the half step between neighbouring samples, so a faded table is
+   7,8,7,8... — mean exactly at centre, its only content at half the wave clock, far above
+   hearing and filtered by `SOUNDBIAS`.
 
-Per-channel mixer level is fine and always was: `lv == 0` forces the output to zero explicitly,
-and the anti-silence floor beside it only fires when `lv` is non-zero.
-
-A third of the same family: **the melodic wave channel had four amplitude steps, not sixteen.**
-`SOUND3CNT_H` offers only mute / 25 / 50 / 100 %, so a 0-15 envelope mapped onto it made most of
-the envelope invisible — a sustain of 13 never left the 100% band, sustains 11 to 15 were
-identical, and the release moved in three coarse jumps that read as stopping rather than
-decaying. It now scales the wavetable, exactly as the drum engine already did. **If a control on
-channel 3 seems not to do anything, suspect this first**: its hardware volume register is far
-coarser than every other control on the instrument.
+Per-channel mixer level is fine and always was: `lv == 0` forces the output to zero explicitly.
 
 ## Payload UI rules (learned the hard way, all of them)
 

@@ -780,17 +780,18 @@ static void synth_tick(void)
 
     for (int c = 0; c < 4; c++) {
         uint8_t vol = (uint8_t)(g_chEnv[c] >> 12);
-        // Floor at 1 ONLY WHILE THE ENVELOPE IS RISING.
+        // NO FLOOR. Volume 0 means volume 0, in every envelope state.
         //
-        // Volume 0 switches the channel's DAC off, and the trigger block below is skipped while
-        // the level is 0 — so an attack, which starts at zero, would never fire its trigger and
-        // would stay silent for ever. That is what the floor is for, and it only applies going up.
+        // There used to be one, because a bare zero written to NRx2 switches the channel's DAC
+        // off and the trigger block below was skipped at level 0, so an attack starting from
+        // zero could never fire its trigger and stayed silent for ever. Both halves of that are
+        // gone: psg_sq_voice and psg_noise_voice keep the DAC alive at volume 0 (see the note
+        // over psg_sq_voice), and the trigger now fires on the note edge whatever the level is.
         //
-        // It used to read `!= ENV_IDLE`, which also caught DECAY, SUSTAIN and RELEASE. A sustain
-        // of 0 therefore decayed to a true zero, entered SUSTAIN, and was promptly floored back
-        // to 1: the one setting that should give a clean percussive decay to silence instead left
-        // the note humming at the quietest audible step for as long as the gate was held.
-        if (vol == 0 && g_envState[c] == ENV_ATK) vol = 1;
+        // The floor was not free. It began every attack with a plateau at volume 1 lasting a
+        // sixteenth of the attack time - up to a third of a second - which on the noise channel
+        // is inaudible, so a retriggered note seemed not to sound at all for seconds; and on the
+        // wave channel it unmuted a near-flat, DC-offset wavetable, so silence ended in a click.
 
         // >>3, not >>4: at full depth that is the whole 0..15 span, so a knob mapped to LEVEL
         // really does run a channel from silent to full rather than nudging it by a quarter.
@@ -930,14 +931,26 @@ static void synth_tick(void)
 
     psg_enable(enL, enR);
 
-    // ---- trigger, AFTER the volume writes, AND on every volume CHANGE -----------------------------
-    // On this DMG-derived PSG the envelope register's volume field is only loaded into the
-    // channel BY A TRIGGER: writing it while the channel plays is ignored ("zombie mode"). Our
-    // envelopes are computed in software, so without this every attack and decay step would be
-    // silently discarded and a note would sound at whatever volume it happened to be triggered
-    // at. Only on a CHANGE, though — a retrigger resets the waveform phase, and doing it every
-    // tick would be a buzz rather than a note. Channel 3's level register applies immediately and
-    // is excluded.
+    // ---- trigger, AFTER the volume writes ---------------------------------------------------------
+    // A TRIGGER IS A NOTE START, NOT A VOLUME UPDATE.
+    //
+    // This block used to fire on every volume CHANGE as well, on the belief that the envelope
+    // register's volume is only loaded into the channel by a trigger ("zombie mode"). That is a
+    // DMG/CGB quirk; the AGB PSG applies an NRx2 write immediately, which is why every GBA chip
+    // engine writes volume straight to the register. So the retriggers bought nothing, and they
+    // cost a great deal:
+    //
+    //   - a trigger resets the duty phase, so every envelope step was a waveform discontinuity.
+    //     At full volume that hides inside the note; at low volume it IS the note, which is why
+    //     a quiet channel clicked its way through an attack or a fade.
+    //   - on CHANNEL 1 a trigger also re-arms the frequency sweep and runs its overflow check,
+    //     so a swept patch ratcheted its pitch once per envelope step. Hence channel 1 being
+    //     the worst of the four.
+    //   - on CHANNEL 4 a trigger reloads the noise LFSR, so retriggering at the control rate
+    //     made the hiss periodic - a tone at the step rate rather than noise.
+    //
+    // If envelopes ever go flat on real hardware, this define is the one line to put back.
+    #define PSG_VOL_NEEDS_RETRIGGER 0
     {
         static uint8_t lastOn = 0;
         static uint8_t lastVol[4] = { 0, 0, 0, 0 };
@@ -949,11 +962,17 @@ static void synth_tick(void)
         for (int c = 0; c < 4; c++) {
             uint8_t bit = (uint8_t)(1u << c);
             if (p->drumMode && (c == 2 || c == 3)) continue;   // the drum engine triggers those
-            int volMoved = (c != 2) && (g_chLevel[c] != lastVol[c]);
+            int volMoved = PSG_VOL_NEEDS_RETRIGGER && (c != 2)
+                        && (g_chLevel[c] != lastVol[c]);
             lastVol[c] = g_chLevel[c];
 
-            if (!(chEdge[c] || (fresh & bit) || volMoved)) continue;
-            if (!g_chLevel[c]) continue;
+            int start = chEdge[c] || (fresh & bit);
+            if (!(start || volMoved)) continue;
+            // A note start triggers whatever the level is: with the DAC held alive at volume 0
+            // the channel sits silent until the envelope lifts it, and the phase reset lands at
+            // the start of the note, where it belongs. A volume-driven retrigger, if one is ever
+            // re-enabled above, still needs something audible to be worth doing.
+            if (!start && !g_chLevel[c]) continue;
 
             switch (c) {
             case 0: psg_sq_trigger(PSG_CH1, period_for(pitch1, 0)); break;
@@ -968,7 +987,7 @@ static void synth_tick(void)
             // wave RAM and in SOUND3CNT_H, both of which apply immediately, so unlike the
             // squares it does not need retriggering on every volume step.
             uint8_t v1 = (uint8_t)(((g_drumEnv[1] >> 12) * g_drumLvl[1]) / 15);
-            if (v1 && v1 != lastDrum[1]) psg_noise_trigger();
+            if (v1 && !lastDrum[1]) psg_noise_trigger();   // when the hit STARTS, not per step
             lastDrum[1] = v1;
         }
     }

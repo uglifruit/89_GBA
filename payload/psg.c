@@ -112,9 +112,23 @@ void psg_enable(uint8_t maskL, uint8_t maskR)
 // Envelope step is parked at 0 (no hardware sweep of volume) and direction at 0, so the value
 // written here IS the instantaneous level. Length is left disabled so the note sustains until
 // we say otherwise.
+//
+// VOLUME 0 SETS THE DIRECTION BIT, AND THAT IS NOT COSMETIC.
+//
+// The DAC of a PSG channel is live only while the top five bits of NRx2 - volume and direction
+// together - are non-zero. Writing a plain zero therefore does two things at once: it silences
+// the channel, which is what we asked for, and it switches the DAC off, which DISABLES the
+// channel. Turning the DAC back on does not re-enable it; only a trigger does. So a note that
+// decayed to a true zero left the channel dead, and everything after it depended on the next
+// trigger landing perfectly.
+//
+// Direction = 1 with step = 0 keeps the DAC alive at volume 0. The hardware envelope stays off
+// (period 0 disables it), the output is exactly as silent, and the channel is still armed - so a
+// retrigger from silence is instant instead of being a recovery.
 void psg_sq_voice(int ch, uint8_t duty, uint8_t vol)
 {
     uint16_t v = (uint16_t)(((vol & 0xFu) << 12) | ((duty & 0x3u) << 6));
+    if (!(vol & 0xFu)) v |= (1u << 11);        // silent, but the DAC stays on
     if (ch == PSG_CH1) REG_SOUND1CNT_H = v;
     else               REG_SOUND2CNT_L = v;
 }
@@ -152,12 +166,22 @@ void psg_wave_load(const uint8_t *wave16)
     REG_SOUND3CNT_L = (uint16_t)((cnt & ~((1u << 5) | (1u << 6))) | ((bank ^ 1u) << 6) | 0x80u);
 }
 
-// Scale one nybble about the mid-point. Silence is a flat table at 8, but a flat table is a DC
-// level rather than true silence, so amp 0 is handled by muting the channel instead.
-static uint8_t scale_nib(uint8_t v, uint8_t amp)
+// Scale one nybble toward silence, WITHOUT LEAVING A DC OFFSET.
+//
+// The wave DAC's centre sits between samples 7 and 8, not on 8. Scaling toward 8 therefore left
+// every quiet table half a step above centre - a fixed DC offset that did not shrink as the
+// envelope did. The channel then sounded silent long before it was silent, and the mute at the
+// very bottom removed the offset in one step: a click, arriving a second or so after the note
+// had apparently already stopped.
+//
+// So scale about 7.5 instead and split the half-step between neighbouring samples - even samples
+// round down, odd ones round up. A fully faded table is 7,8,7,8..., whose mean is exactly the
+// DAC centre and whose only content is at half the wave clock, far above hearing and filtered by
+// SOUNDBIAS anyway. Silence is now genuinely silent and there is nothing left to click.
+static uint8_t scale_nib(uint8_t v, uint8_t amp, int odd)
 {
-    int d = ((int)v - 8) * (int)amp / 15;      // constant divisor
-    int o = 8 + d;
+    int d2 = ((int)v * 2 - 15) * (int)amp / 15;   // deviation from 7.5, doubled. Constant divisor.
+    int o  = (15 + d2 + (odd ? 1 : 0)) / 2;       // back to a nybble, rounding alternately
     return (uint8_t)(o < 0 ? 0 : (o > 15 ? 15 : o));
 }
 
@@ -168,10 +192,11 @@ void psg_wave_load_scaled(const uint8_t *wave16, uint8_t amp)
 
     for (int i = 0; i < 8; i++) {
         uint8_t b0 = wave16[i * 2], b1 = wave16[i * 2 + 1];
-        uint8_t o0 = (uint8_t)((scale_nib((uint8_t)(b0 >> 4), amp) << 4)
-                             |  scale_nib((uint8_t)(b0 & 0xF), amp));
-        uint8_t o1 = (uint8_t)((scale_nib((uint8_t)(b1 >> 4), amp) << 4)
-                             |  scale_nib((uint8_t)(b1 & 0xF), amp));
+        // High nybble is the earlier sample, so within every byte the parity runs even, odd.
+        uint8_t o0 = (uint8_t)((scale_nib((uint8_t)(b0 >> 4), amp, 0) << 4)
+                             |  scale_nib((uint8_t)(b0 & 0xF), amp, 1));
+        uint8_t o1 = (uint8_t)((scale_nib((uint8_t)(b1 >> 4), amp, 0) << 4)
+                             |  scale_nib((uint8_t)(b1 & 0xF), amp, 1));
         WAVE_RAM[i] = (uint16_t)(o0 | (o1 << 8));
     }
 
@@ -190,7 +215,11 @@ void psg_wave_trigger(uint16_t period) { REG_SOUND3CNT_X = (uint16_t)((period & 
 // ---- channel 4, noise ----
 void psg_noise_voice(uint8_t vol)
 {
-    REG_SOUND4CNT_L = (uint16_t)((vol & 0xFu) << 12);
+    // Direction bit at volume 0, for the reason spelled out over psg_sq_voice: a bare zero
+    // switches the DAC off and takes the channel with it.
+    uint16_t v = (uint16_t)((vol & 0xFu) << 12);
+    if (!(vol & 0xFu)) v |= (1u << 11);
+    REG_SOUND4CNT_L = v;
 }
 
 static uint8_t g_noiseCtl = 0;
