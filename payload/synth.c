@@ -895,10 +895,20 @@ static void synth_tick(void)
     }
 
     psg_master(p->masterL, p->masterR, p->ratio);
+
     // 0xC = channels 3 and 4: while drums are armed those two are audible whatever the mixer
     // says about them, because they are no longer the mixer's to silence.
-    psg_enable((uint8_t)(maskL | (p->drumMode ? 0xC : 0)),
-               (uint8_t)(maskR | (p->drumMode ? 0xC : 0)));
+    uint8_t enL = (uint8_t)(maskL | (p->drumMode ? 0xC : 0));
+    uint8_t enR = (uint8_t)(maskR | (p->drumMode ? 0xC : 0));
+
+    // MASTER VOLUME 0 IS NOT SILENCE ON THIS HARDWARE. SOUNDCNT_L scales by (vol+1)/8, so 0 is
+    // one eighth rather than off — a volume control that cannot reach zero, which is not what
+    // anyone means by turning it down. Drop the per-channel enables for that side instead, which
+    // genuinely mutes it.
+    if (p->masterL == 0) enL = 0;
+    if (p->masterR == 0) enR = 0;
+
+    psg_enable(enL, enR);
 
     // ---- trigger, AFTER the volume writes, AND on every volume CHANGE -----------------------------
     // On this DMG-derived PSG the envelope register's volume field is only loaded into the

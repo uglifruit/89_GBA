@@ -169,6 +169,22 @@ RAM with scaled copies of a drum body.
 DMA1/2, a timer driving the FIFO, and sample data in a payload already taking six seconds to
 upload.
 
+## Two levels that could not reach zero
+
+Both were the same shape — a value that says zero and does not mean it.
+
+1. **Sustain 0 was not silent.** The envelope volume was floored at 1 for any state that was not
+   IDLE, and a sustain of 0 decays to a true zero and then sits in SUSTAIN. The floor exists
+   because volume 0 switches the DAC off and the trigger block is skipped while the level is 0,
+   so an attack starting from zero would never fire — but that only applies while the envelope is
+   RISING. The condition is `== ENV_ATK`, not `!= ENV_IDLE`.
+2. **Master volume 0 is not silence on this hardware.** `SOUNDCNT_L` scales by `(vol+1)/8`, so 0
+   is one eighth. The per-channel enables are dropped for that side instead, which genuinely
+   mutes it.
+
+Per-channel mixer level is fine and always was: `lv == 0` forces the output to zero explicitly,
+and the anti-silence floor beside it only fires when `lv` is non-zero.
+
 ## Payload UI rules (learned the hard way, all of them)
 
 1. **NEVER ERASE THEN DRAW.** Every flickering region had the same shape: clear a box to the
