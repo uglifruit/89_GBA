@@ -776,9 +776,17 @@ static void synth_tick(void)
 
     for (int c = 0; c < 4; c++) {
         uint8_t vol = (uint8_t)(g_chEnv[c] >> 12);
-        // Floor an ACTIVE note at 1: volume 0 with direction 0 switches the DAC off, and the
-        // trigger below is skipped while the volume is 0, so a slow attack would never sound.
-        if (vol == 0 && g_envState[c] != ENV_IDLE) vol = 1;
+        // Floor at 1 ONLY WHILE THE ENVELOPE IS RISING.
+        //
+        // Volume 0 switches the channel's DAC off, and the trigger block below is skipped while
+        // the level is 0 — so an attack, which starts at zero, would never fire its trigger and
+        // would stay silent for ever. That is what the floor is for, and it only applies going up.
+        //
+        // It used to read `!= ENV_IDLE`, which also caught DECAY, SUSTAIN and RELEASE. A sustain
+        // of 0 therefore decayed to a true zero, entered SUSTAIN, and was promptly floored back
+        // to 1: the one setting that should give a clean percussive decay to silence instead left
+        // the note humming at the quietest audible step for as long as the gate was held.
+        if (vol == 0 && g_envState[c] == ENV_ATK) vol = 1;
 
         // >>3, not >>4: at full depth that is the whole 0..15 span, so a knob mapped to LEVEL
         // really does run a channel from silent to full rather than nudging it by a quarter.
