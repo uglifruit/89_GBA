@@ -535,6 +535,7 @@ static void synth_tick(void)
     int32_t modRel[4]   = { 0, 0, 0, 0 };
     uint8_t ornForce[4] = { 0, 0, 0, 0 };     // ornament slot forced on by a mapping
     int32_t modDetune = 0, modSweep = 0, modNPitch = 0, modOrnRate = 0;
+    int     pitchToNoise = 0;      // does any PITCH mapping actually reach channel 4?
     int32_t modScale = 0, modKey = 0;
 
     for (int s = 0; s < SRC_COUNT; s++) {
@@ -552,6 +553,7 @@ static void synth_tick(void)
             int32_t semiQ8 = ((raw - p->cvOffset) * g_cvRecip) >> 12;
             int32_t v = (semiQ8 * depth) >> 5;      // depth 32 is unity 1V/oct
             for (int c = 0; c < 4; c++) if (mask & (1u << c)) modPitch[c] += v;
+            if (mask & 0x8) pitchToNoise = 1;
             continue;
         }
 
@@ -864,6 +866,25 @@ static void synth_tick(void)
         psg_noise_voice(v);
     } else {
         int shift = (int)clampi((int32_t)p->noiseShift + (modNPitch >> 5), 0, 13);
+
+        // THE NOISE CHANNEL CAN BE PITCHED, BUT ONLY IN OCTAVES.
+        //
+        // Its frequency is 524288 / r / 2^(s+1), so the shift field steps by a factor of two and
+        // nothing finer: the eight divider ratios do subdivide an octave, but unevenly (roughly
+        // 0, -3.9, -7.0, -9.7 semitones), so there is no honest chromatic mapping to be had.
+        // Octave tracking is the whole of what this hardware offers, and it is what tuned noise
+        // percussion has always meant on a Game Boy.
+        //
+        // Applied ONLY when a PITCH mapping actually ticks channel 4. Before this, g_chPitch[3]
+        // was computed every tick and then never used, so ticking that box did nothing at all
+        // and did it silently.
+        if (pitchToNoise) {
+            int32_t rel = (((g_chPitch[3] + 128) >> 8) - (int32_t)p->baseNote);
+            int32_t oct = rel / 12;                       // constant divisor
+            if (rel < 0 && (rel % 12)) oct--;             // floor, so octaves are even either side
+            shift = (int)clampi(shift - oct, 0, 13);      // higher note, lower shift
+        }
+
         psg_noise_set(p->noiseDiv, (uint8_t)shift, p->noiseWidth);
         psg_noise_voice(p->drumMode ? 0 : g_chLevel[3]);
     }

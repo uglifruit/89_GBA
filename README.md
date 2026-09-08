@@ -161,6 +161,13 @@ volume steps, is sidestepped by scaling the wavetable itself rather than using t
 register. No Direct Sound and no DMA: real sample playback would need a timer, the FIFOs, and
 sample data in an already six-second payload.
 
+**The noise channel tracks pitch, but only in octaves.** Its frequency is
+`524288 / r / 2^(s+1)`, so the shift field steps by a factor of two and nothing finer — the
+eight divider ratios do subdivide an octave, but unevenly, so there is no honest chromatic
+mapping to be had. Tick channel 4 on a PITCH mapping and it follows an octave at a time, which
+is what tuned noise percussion has always meant on this hardware. `N PITCH` on the CHAN page and
+the `N PITCH` destination still give you direct control.
+
 **Ornament mappings are switches, not depths.** When a MAP destination is `ORNMNT` the amount
 column names the *slot*; the source is on above halfway. There is no forty per cent of an
 arpeggio.
