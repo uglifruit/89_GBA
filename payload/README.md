@@ -17,6 +17,8 @@ builds with a bare `arm-none-eabi` toolchain targeting the GBA's ARM7TDMI (armv4
 - Draws a performance readout and an eleven-page editor.
 - Holds the patch, which the Workshop stores for it in flash — sixteen slots, transferred a byte
   per link word.
+- Boots into a showcase patch rather than a blank one: a hard-panned square pair with a shimmer
+  above it, playable from the module's switch with nothing patched. See `synth_default_patch()`.
 
 ## Files
 

@@ -55,6 +55,38 @@ Patch the GBA's **headphone jack** into the rack. It is around 1 Vpp against Eur
 so expect it to be quiet. The original GBA (AGB-001) and the Game Boy Micro have a headphone
 socket; the **GBA SP has none** and needs the official SP adapter.
 
+### The default patch
+
+It boots playing something. A hard-panned square pair with a shimmer over the top, and **the
+module's own switch triggers it** — no patch cables needed to hear it work.
+
+| | |
+|---|---|
+| **Channel 1** | left, 50% duty, 10 ms attack, fast portamento |
+| **Channel 2** | right, 25% duty, 250 ms attack, no portamento, +2 detune |
+| **Channel 3** | both, sine on a permanent octave trill, level under the Main knob |
+| **Channel 4** | off — the DRUM page is where noise earns its place |
+
+The pair arrives from different sides at different times, which is most of why it sounds wide.
+
+| Control | Does |
+|---|---|
+| **Switch down** | trigger |
+| **CV In 2** | 1V/oct pitch |
+| **Main knob** | level of channel 3 |
+| **X knob** | attack, both envelopes together |
+| **Y knob** | release, both envelopes together |
+| **A** / **B** | trigger / hold |
+| **L** | cycle both duty cycles |
+| **R** | cycle channel 1's sweep time |
+| **D-pad ↑ ↓ ← →** | ornament: major chord, minor chord, octave drop-and-leap, chromatic run |
+
+The D-pad ornaments apply to the melodic pair only, so channel 3 keeps its trill underneath
+while the lead switches figures. Up and Down loop; Left and Right are one-shots.
+
+CV In 1 and both Audio Ins are deliberately unassigned — nothing should move that you did not
+patch. The MAP page is where you give them a job.
+
 ### Module panel
 
 | Jack | Default role | Re-assignable? |
