@@ -113,23 +113,28 @@ void psg_enable(uint8_t maskL, uint8_t maskR)
 // written here IS the instantaneous level. Length is left disabled so the note sustains until
 // we say otherwise.
 //
-// THE ENVELOPE DIRECTION BIT IS ALWAYS SET, AND THAT IS NOT COSMETIC.
+// A BARE ZERO IN NRx2 IS HOW YOU SILENCE A PSG CHANNEL. Do not "improve" it.
 //
-// Two hardware rules meet here. First, a channel's DAC is live only while the top five bits of
-// NRx2 - volume and direction together - are non-zero, so a plain zero does not merely silence
-// the channel, it switches the DAC off and DISABLES the channel. Turning the DAC back on does
-// not re-enable it; only a trigger does. Second, "zombie mode": CHANGING the direction bit while
-// the channel plays makes the hardware recompute the volume as 16 - volume.
+// The channel DAC maps digital 0 to a RAIL, not to the centre, so volume 0 with the DAC still
+// running is a DC offset rather than silence - and since a volume only reaches the channel on a
+// trigger, the channel also carries on sounding at its previous level until something triggers
+// it. Writing a plain zero switches the DAC off instead, which disables the channel and is the
+// only thing that gives true silence. Every Game Boy engine mutes this way.
 //
-// So the bit is set unconditionally rather than only at volume 0. Always set means the DAC never
-// switches off and the direction never changes, so neither rule can fire. The envelope period
-// stays 0, which leaves the hardware envelope disabled, so the value written here is still the
-// instantaneous level and nothing creeps. Length is left disabled so a note sustains until we
-// say otherwise.
+// The cost is the rule below it, and it is the whole reason this function's callers are ordered
+// the way they are: turning the DAC back on does NOT re-enable the channel, only a trigger does.
+// So synth_tick() writes every volume first and triggers afterwards, at the very end.
+//
+// (An earlier attempt held the DAC alive by setting the envelope direction bit at volume 0. It
+// left both squares permanently audible - the step to zero is the one step that never earns a
+// trigger - and toggling that bit is itself a zombie-mode event that recomputes the volume as
+// 16 - volume. Two faults for no gain.)
+//
+// Envelope step is parked at 0, so the hardware envelope never runs and the value written here
+// IS the instantaneous level. Length is left disabled so a note sustains until we say otherwise.
 void psg_sq_voice(int ch, uint8_t duty, uint8_t vol)
 {
     uint16_t v = (uint16_t)(((vol & 0xFu) << 12) | ((duty & 0x3u) << 6));
-    v |= (1u << 11);                           // see above: always set, never toggled
     if (ch == PSG_CH1) REG_SOUND1CNT_H = v;
     else               REG_SOUND2CNT_L = v;
 }
@@ -216,8 +221,8 @@ void psg_wave_trigger(uint16_t period) { REG_SOUND3CNT_X = (uint16_t)((period & 
 // ---- channel 4, noise ----
 void psg_noise_voice(uint8_t vol)
 {
-    // Direction bit, for the reason spelled out over psg_sq_voice.
-    REG_SOUND4CNT_L = (uint16_t)(((vol & 0xFu) << 12) | (1u << 11));
+    // A bare zero at volume 0, for the reason spelled out over psg_sq_voice.
+    REG_SOUND4CNT_L = (uint16_t)((vol & 0xFu) << 12);
 }
 
 static uint8_t g_noiseCtl = 0;

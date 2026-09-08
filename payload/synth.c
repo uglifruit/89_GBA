@@ -957,6 +957,7 @@ static void synth_tick(void)
     #define PSG_VOL_NEEDS_RETRIGGER 1
     {
         static uint8_t lastOn = 0;
+        static uint8_t swArmed = 0;      // channel 1's sweep is armed once per note, see below
         static uint8_t lastVol[4] = { 0, 0, 0, 0 };
         static uint8_t lastDrum[2] = { 0, 0 };
         uint8_t on    = (uint8_t)(maskL | maskR);
@@ -980,10 +981,25 @@ static void synth_tick(void)
 
             switch (c) {
             case 0:
-                // Arm the configured sweep only when the note begins. On a volume-only retrigger
-                // the sweep is held off, so the overflow check cannot disable the channel.
-                if (start) psg_sq_sweep((uint8_t)sweepShift, p->sweepDir, p->sweepTime);
-                else       psg_sq_sweep(0, 0, 0);
+                // Arm the configured sweep at the START of a note and nowhere else. Every other
+                // trigger here is a volume step, and a trigger re-runs the sweep's overflow
+                // check, which DISABLES the channel when it overflows - so leaving the sweep
+                // programmed had channel 1 cutting in and out at the control rate.
+                //
+                // "Start" means the first trigger that can actually be heard, not the note edge:
+                // with a slow attack the edge arrives while the level is still 0 and the DAC is
+                // off, and a sweep armed there would be thrown away by the next volume step.
+                //
+                // A moving envelope still curtails a sweep, because the next volume retrigger
+                // disarms it. Sweep and a software envelope are not fully compatible on this
+                // hardware; a sustained level is where a sweep gets to run.
+                if (start) swArmed = 0;
+                if (!swArmed && g_chLevel[0]) {
+                    psg_sq_sweep((uint8_t)sweepShift, p->sweepDir, p->sweepTime);
+                    swArmed = 1;
+                } else {
+                    psg_sq_sweep(0, 0, 0);
+                }
                 psg_sq_trigger(PSG_CH1, period_for(pitch1, 0));
                 break;
             case 1: psg_sq_trigger(PSG_CH2, period_for(pitch2, 0)); break;
