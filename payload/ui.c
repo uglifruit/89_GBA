@@ -616,7 +616,7 @@ static void edit_static(void)
     if (g_page == PAGE_DRUM) {
         // Two short lines rather than one that runs off the right edge.
         text(6, 124, "ANY INPUT GOING HIGH FIRES ITS SOUND.", COL_DIM, 1);
-        text(6, 136, "DRUMS BORROW CH1 AND CH4 WHILE ARMED.", COL_DIM, 1);
+        text(6, 136, "DRUMS BORROW CH3 AND CH4. SQUARES STAY FREE.", COL_DIM, 1);
     }
     if (g_page == PAGE_CAL)  text(6, 140, "GBA PSG VOICE   BY ANDY JENKINSON 2026", COL_DIM, 1);
     if (g_page == PAGE_MEM)  text(6, 140, "D-PAD PICKS A SLOT.   A+UP SAVES.   B+DOWN LOADS.", COL_DIM, 1);

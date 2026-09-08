@@ -124,8 +124,15 @@ extern const char *key_name[12];
 // ---- drums ----
 // A drum fires when an input goes HIGH, so any jack carrying a trigger, a gate, or simply a loud
 // enough signal becomes a drum pad. The sounds are synthesised on the PSG rather than sampled:
-// the GBA's sample channels would need DMA and a timer of their own, and a synthesised kick is
-// editable in a way a sample is not.
+// the GBA's Direct Sound channels would need DMA, a timer and sample data in an already large
+// payload, and a synthesised kick is editable in a way a sample is not.
+//
+// Pitched drums live on CHANNEL 3, the wavetable channel, and noise drums on channel 4. The wave
+// channel is the right home for them: it plays an arbitrary waveform, so a kick has a body
+// instead of being a square, and its period sweeps like the squares do. Its one weakness — four
+// volume steps — is sidestepped by scaling the wavetable itself (see psg_wave_load_scaled).
+//
+// That leaves BOTH squares free for melody while drums play, which is the better split anyway.
 #define DRUM_SRC_AUD1  0
 #define DRUM_SRC_AUD2  1
 #define DRUM_SRC_CV1   2
@@ -135,7 +142,7 @@ extern const char *key_name[12];
 #define DRUM_SRC_COUNT 6
 extern const char *drum_src_name[DRUM_SRC_COUNT];
 
-#define DRUM_PRESETS 9     // index 0 is OFF
+#define DRUM_PRESETS 11    // index 0 is OFF
 extern const char *drum_name[DRUM_PRESETS];
 
 // ---- the patch ----

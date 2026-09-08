@@ -152,6 +152,32 @@ void psg_wave_load(const uint8_t *wave16)
     REG_SOUND3CNT_L = (uint16_t)((cnt & ~((1u << 5) | (1u << 6))) | ((bank ^ 1u) << 6) | 0x80u);
 }
 
+// Scale one nybble about the mid-point. Silence is a flat table at 8, but a flat table is a DC
+// level rather than true silence, so amp 0 is handled by muting the channel instead.
+static uint8_t scale_nib(uint8_t v, uint8_t amp)
+{
+    int d = ((int)v - 8) * (int)amp / 15;      // constant divisor
+    int o = 8 + d;
+    return (uint8_t)(o < 0 ? 0 : (o > 15 ? 15 : o));
+}
+
+void psg_wave_load_scaled(const uint8_t *wave16, uint8_t amp)
+{
+    uint16_t cnt  = REG_SOUND3CNT_L;
+    uint16_t bank = (uint16_t)((cnt >> 6) & 1u);
+
+    for (int i = 0; i < 8; i++) {
+        uint8_t b0 = wave16[i * 2], b1 = wave16[i * 2 + 1];
+        uint8_t o0 = (uint8_t)((scale_nib((uint8_t)(b0 >> 4), amp) << 4)
+                             |  scale_nib((uint8_t)(b0 & 0xF), amp));
+        uint8_t o1 = (uint8_t)((scale_nib((uint8_t)(b1 >> 4), amp) << 4)
+                             |  scale_nib((uint8_t)(b1 & 0xF), amp));
+        WAVE_RAM[i] = (uint16_t)(o0 | (o1 << 8));
+    }
+
+    REG_SOUND3CNT_L = (uint16_t)((cnt & ~((1u << 5) | (1u << 6))) | ((bank ^ 1u) << 6) | 0x80u);
+}
+
 void psg_wave_voice(uint8_t volSel)
 {
     REG_SOUND3CNT_L = (uint16_t)(REG_SOUND3CNT_L | 0x80u);        // DAC on

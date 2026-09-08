@@ -73,31 +73,36 @@ const char *act_name[ACT_COUNT] = {
 
 const char *drum_src_name[DRUM_SRC_COUNT] = { "AUD 1", "AUD 2", "CV 1", "CV 2", "PU 2", "SWITCH" };
 const char *drum_name[DRUM_PRESETS] = {
-    "OFF", "KICK", "SNARE", "CL HAT", "OP HAT", "TOM HI", "TOM LO", "RIM", "CLAP"
+    "OFF", "KICK", "SNARE", "CL HAT", "OP HAT", "TOM HI", "TOM LO",
+    "RIM", "CLAP", "COWBELL", "ZAP"
 };
 
 // A drum voice. `noise` picks which PSG channel it lands on: the noise generator for anything
-// with a hiss, channel 1 for anything with a pitch. Pitched drums fall by `sweep` semitones over
-// their decay, which is the whole trick behind a PSG kick.
+// with a hiss, the WAVE channel for anything with a pitch. Pitched drums fall by `sweep`
+// semitones over their decay, which is the whole trick behind a PSG kick, and `wave` chooses the
+// body they fall with — a sine for a kick is a completely different sound from a square.
 typedef struct {
-    uint8_t noise;      // 1 = channel 4, 0 = channel 1
+    uint8_t noise;      // 1 = channel 4 (noise), 0 = channel 3 (wave)
     uint8_t note;       // starting MIDI note (pitched) or noise shift (noise)
     uint8_t sweep;      // semitones of downward pitch sweep across the decay
     uint8_t dec;        // ENV_MS index
     uint8_t level;      // 0..15
     uint8_t width;      // noise width: 1 = 7-bit, metallic
+    uint8_t wave;       // index into psg_wave_preset, pitched voices only
 } DrumVoice;
 
 static const DrumVoice DRUM[DRUM_PRESETS] = {
-    { 0,  0,  0,  0,  0, 0 },    // OFF
-    { 0, 45, 24,  5, 15, 0 },    // KICK    low, fast fall
-    { 1,  4,  0,  6, 13, 0 },    // SNARE   mid noise
-    { 1,  2,  0,  2, 10, 1 },    // CL HAT  short metallic
-    { 1,  2,  0,  7, 10, 1 },    // OP HAT  same, long
-    { 0, 62, 10,  7, 13, 0 },    // TOM HI
-    { 0, 50, 10,  8, 13, 0 },    // TOM LO
-    { 1,  0,  0,  1, 12, 1 },    // RIM     very short, very bright
-    { 1,  5,  0,  4, 12, 0 },    // CLAP
+    { 0,  0,  0,  0,  0, 0,  0 },   // OFF
+    { 0, 45, 24,  5, 15, 0,  0 },   // KICK     sine body, fast deep fall
+    { 1,  4,  0,  6, 13, 0,  0 },   // SNARE    mid noise
+    { 1,  2,  0,  2, 10, 1,  0 },   // CL HAT   short metallic
+    { 1,  2,  0,  7, 10, 1,  0 },   // OP HAT   same, long
+    { 0, 62, 10,  7, 13, 0,  1 },   // TOM HI   triangle body
+    { 0, 50, 10,  8, 13, 0,  1 },   // TOM LO
+    { 1,  0,  0,  1, 12, 1,  0 },   // RIM      very short, very bright
+    { 1,  5,  0,  4, 12, 0,  0 },   // CLAP
+    { 0, 74,  0,  6, 12, 0,  5 },   // COWBELL  narrow pulse, no sweep
+    { 0, 80, 36,  4, 13, 0,  2 },   // ZAP      saw, huge fall
 };
 
 Patch g_patch;
@@ -382,6 +387,8 @@ static uint8_t  g_drumDec[2] = { 0, 0 };
 static uint8_t  g_drumLvl[2] = { 0, 0 };
 static uint8_t  g_drumShift  = 0;
 static uint8_t  g_drumWidth  = 0;
+static uint8_t  g_drumWave   = 0;
+static uint8_t  g_drumAmp    = 0xFF;   // last amplitude written to wave RAM
 
 static void drum_fire(int preset)
 {
@@ -396,7 +403,10 @@ static void drum_fire(int preset)
         g_drumShift = d->note;
         g_drumWidth = d->width;
     } else {
+        g_drumWave  = d->wave;
+        g_drumAmp   = 0xFF;              // force the wavetable to reload at the new amplitude
         g_drumPitch = (int32_t)d->note << 8;
+        psg_wave_trigger(0);             // restart the waveform phase for a clean attack
         // Fall the whole sweep over roughly the decay time, in control ticks.
         uint16_t ms = ENV_MS[d->dec & 15];
         if (ms < 5) ms = 5;
@@ -722,29 +732,57 @@ static void synth_tick(void)
     int duty0 = (int)clampi((int32_t)p->duty[0] + (modDuty[0] >> 6), 0, 3);
     int duty1 = (int)clampi((int32_t)p->duty[1] + (modDuty[1] >> 6), 0, 3);
 
-    // Drum mode borrows channels 1 and 4. Their melodic settings are left alone in the patch;
-    // they are simply not what is driving the hardware while drums are armed.
-    int drumCh1 = p->drumMode && g_drumEnv[0];
+    // Drum mode borrows channels 3 and 4 — the wavetable and the noise generator. BOTH SQUARES
+    // STAY MELODIC, which is the better half of the machine to keep: two squares is a lead and a
+    // bass, where a square and a wavetable is an awkward pair.
+    int drumCh3 = p->drumMode && g_drumEnv[0];
     int drumCh4 = p->drumMode && g_drumEnv[1];
 
-    if (drumCh1) {
-        uint8_t v = (uint8_t)(((g_drumEnv[0] >> 12) * g_drumLvl[0]) / 15);
-        psg_sq_voice(PSG_CH1, PSG_DUTY_50, v);
-        psg_sq_period(PSG_CH1, period_for(g_drumPitch, 0));
-    } else {
-        psg_sq_voice(PSG_CH1, (uint8_t)duty0, p->drumMode ? 0 : g_chLevel[0]);
-        psg_sq_period(PSG_CH1, period_for(pitch1, 0));
-    }
+    psg_sq_voice(PSG_CH1, (uint8_t)duty0, g_chLevel[0]);
+    psg_sq_period(PSG_CH1, period_for(pitch1, 0));
 
     psg_sq_voice(PSG_CH2, (uint8_t)duty1, g_chLevel[1]);
     psg_sq_period(PSG_CH2, period_for(pitch2, 0));
 
-    {
+    // The wave channel, and the reason drums moved here: an arbitrary waveform means a kick has a
+    // body rather than being a square with a fast decay.
+    //
+    // Its volume register only has four steps, which is far too coarse for percussion, so the
+    // amplitude is applied by SCALING THE WAVETABLE instead — sixteen steps, eight halfword
+    // writes, and only when the level actually changes. That is the trick every Game Boy tracker
+    // uses on this channel.
+    if (drumCh3) {
+        uint8_t amp = (uint8_t)(((g_drumEnv[0] >> 12) * g_drumLvl[0]) / 15);
+        if (amp != g_drumAmp) {
+            g_drumAmp = amp;
+            if (amp == 0) {
+                psg_wave_voice(PSG_WAVE_MUTE);
+            } else {
+                psg_wave_load_scaled(psg_wave_preset[g_drumWave % PSG_WAVE_PRESETS], amp);
+                psg_wave_voice(PSG_WAVE_100);
+            }
+        }
+        psg_wave_period(period_for(g_drumPitch, 12));
+    } else if (p->drumMode) {
+        psg_wave_voice(PSG_WAVE_MUTE);
+        g_drumAmp = 0xFF;
+    } else {
         uint8_t wv = (g_chLevel[2] == 0) ? PSG_WAVE_MUTE
                    : (g_chLevel[2] <= 5) ? PSG_WAVE_25
                    : (g_chLevel[2] <= 10) ? PSG_WAVE_50 : PSG_WAVE_100;
         psg_wave_voice(wv);
         psg_wave_period(period_for(pitch3, 12));       // wave is an octave down for the same n
+    }
+
+    // Leaving drum mode hands the wave channel back, so its melodic waveform has to be restored:
+    // the drum engine has been overwriting wave RAM with scaled copies of a drum body.
+    {
+        static uint8_t lastDrumMode = 0;
+        if (lastDrumMode && !p->drumMode) {
+            psg_wave_load(psg_wave_preset[p->waveSel % PSG_WAVE_PRESETS]);
+            g_drumAmp = 0xFF;
+        }
+        lastDrumMode = p->drumMode;
     }
 
     if (drumCh4) {
@@ -763,8 +801,10 @@ static void synth_tick(void)
     }
 
     psg_master(p->masterL, p->masterR, p->ratio);
-    psg_enable((uint8_t)(maskL | (p->drumMode ? 0x9 : 0)),
-               (uint8_t)(maskR | (p->drumMode ? 0x9 : 0)));
+    // 0xC = channels 3 and 4: while drums are armed those two are audible whatever the mixer
+    // says about them, because they are no longer the mixer's to silence.
+    psg_enable((uint8_t)(maskL | (p->drumMode ? 0xC : 0)),
+               (uint8_t)(maskR | (p->drumMode ? 0xC : 0)));
 
     // ---- trigger, AFTER the volume writes, AND on every volume CHANGE -----------------------------
     // On this DMG-derived PSG the envelope register's volume field is only loaded into the
@@ -784,7 +824,7 @@ static void synth_tick(void)
 
         for (int c = 0; c < 4; c++) {
             uint8_t bit = (uint8_t)(1u << c);
-            if (p->drumMode && (c == 0 || c == 3)) continue;   // the drum engine triggers those
+            if (p->drumMode && (c == 2 || c == 3)) continue;   // the drum engine triggers those
             int volMoved = (c != 2) && (g_chLevel[c] != lastVol[c]);
             lastVol[c] = g_chLevel[c];
 
@@ -800,11 +840,11 @@ static void synth_tick(void)
         }
 
         if (p->drumMode) {
-            uint8_t v0 = (uint8_t)(((g_drumEnv[0] >> 12) * g_drumLvl[0]) / 15);
+            // The wave channel needs a trigger only when a drum STARTS: its level lives in
+            // wave RAM and in SOUND3CNT_H, both of which apply immediately, so unlike the
+            // squares it does not need retriggering on every volume step.
             uint8_t v1 = (uint8_t)(((g_drumEnv[1] >> 12) * g_drumLvl[1]) / 15);
-            if (v0 && v0 != lastDrum[0]) psg_sq_trigger(PSG_CH1, period_for(g_drumPitch, 0));
             if (v1 && v1 != lastDrum[1]) psg_noise_trigger();
-            lastDrum[0] = v0;
             lastDrum[1] = v1;
         }
     }

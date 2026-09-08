@@ -106,7 +106,7 @@ holds, so latch a drone in PLAY and then go and edit it.
 | **BTN** | what each of the eight GBA buttons does |
 | **MAP** | modulation matrix: seven sources × destination × amount × per-voice tickboxes |
 | **ORN** | ornaments — sixteen-step semitone sequences, edited graphically, with a loop/end marker |
-| **DRUM** | a drum sound per input; any input going high fires it |
+| **DRUM** | a drum sound per input; any input going high fires it. Borrows channels 3 and 4 |
 | **MEM** | sixteen patch slots on the card. A+Up saves, B+Down loads |
 | **CAL** | **CV input scale and offset trim**, base note, master volume, PSG level, link mode |
 | **SET** | master tuning in cents, key, scale (19 of them), octave, user-scale editor |
@@ -121,6 +121,13 @@ exactly what having a display is for. It also shows the link's traffic counters,
 **Triggering is a grid, not a switch.** Channel 1 can fire from the Workshop's momentary switch
 *and* Pulse In 2 while channel 2 fires from the switch only. A channel wired to nothing is
 deliberately silent, and HOLD does not override that.
+
+**Drums live on the wavetable and noise channels, so both squares stay melodic.** Pitched drums
+play on channel 3 because it can hold an arbitrary waveform — a kick has a body instead of being
+a square with a fast decay — and its period sweeps like the squares do. Its one weakness, four
+volume steps, is sidestepped by scaling the wavetable itself rather than using the volume
+register. No Direct Sound and no DMA: real sample playback would need a timer, the FIFOs, and
+sample data in an already six-second payload.
 
 **Ornament mappings are switches, not depths.** When a MAP destination is `ORNMNT` the amount
 column names the *slot*; the source is on above halfway. There is no forty per cent of an

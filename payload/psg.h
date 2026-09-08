@@ -54,6 +54,14 @@ void psg_sq_sweep(uint8_t shift, uint8_t dir, uint8_t time);
 
 // Channel 3, wave. `wave16` is 16 bytes = 32 nybble samples, high nybble first.
 void psg_wave_load(const uint8_t *wave16);
+
+// Load a wavetable scaled about its centre, `amp` 0..15.
+//
+// SOUND3CNT_H gives the wave channel only four volume steps (mute / 25 / 50 / 100 %), which is
+// far too coarse for a drum's decay. Scaling the SAMPLES instead gives sixteen, and costs eight
+// halfword writes — the trick every Game Boy tracker uses on this channel. The write goes to the
+// idle bank and then flips, so the amplitude change is glitch-free.
+void psg_wave_load_scaled(const uint8_t *wave16, uint8_t amp);
 void psg_wave_voice(uint8_t volSel);
 void psg_wave_period(uint16_t period);
 void psg_wave_trigger(uint16_t period);

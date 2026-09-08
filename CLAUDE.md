@@ -150,6 +150,25 @@ C-compatible (payload is C, firmware is C++): plain `#define` and `static inline
    IRQ never fires the payload degrades to exactly the polled behaviour that has always worked,
    instead of going deaf and looking like a failed multiboot. The CAL page shows which is live.
 
+## The drum engine
+
+Pitched drums are on **channel 3 (wave)**, noise drums on **channel 4**. Both squares stay
+melodic, which is the better half to keep — two squares is a lead and a bass.
+
+The wave channel is the right home for percussion: it plays an arbitrary waveform, so a kick has
+a body rather than being a square, and its period register sweeps like the squares do. Its one
+weakness is that `SOUND3CNT_H` gives only four volume steps, far too coarse for a decay — so the
+amplitude is applied by **scaling the wavetable samples** (`psg_wave_load_scaled`), which gives
+sixteen steps for eight halfword writes. That is the standard Game Boy tracker trick, and it also
+means the wave channel needs **no retrigger on a volume change**, unlike the squares and noise.
+
+Leaving drum mode must restore the melodic waveform: the drum engine has been overwriting wave
+RAM with scaled copies of a drum body.
+
+**No Direct Sound, no DMA.** `SOUNDCNT_H` stays at PSG-100%/DMA-off. Sample playback would need
+DMA1/2, a timer driving the FIFO, and sample data in a payload already taking six seconds to
+upload.
+
 ## Payload UI rules (learned the hard way, all of them)
 
 1. **NEVER ERASE THEN DRAW.** Every flickering region had the same shape: clear a box to the
