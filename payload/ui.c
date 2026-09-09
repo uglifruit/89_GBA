@@ -612,18 +612,22 @@ static void edit_static(void)
             dec_at(d, 0, (uint32_t)c + 1);
             text(158 + c * 18 + 3, hy, d, COL_DIM, 1);
         }
-        text(6, 124, "L/R COLUMN   A+UP/DN VALUE   A TOGGLES A TICK", COL_DIM, 1);
+        text(0, 124, "L/R COLUMN  A+UP/DN VALUE  A=TOGGLE TICK", COL_DIM, 1);
         text(6, 136, "ORNAMENT: AMOUNT IS THE ORNAMENT SLOT", COL_DIM, 1);
     }
-    if (g_page == PAGE_MIX)  text(6, 140, "L/R CHANNEL   A+UP/DN LEVEL   A+L/R PAN", COL_DIM, 1);
-    if (g_page == PAGE_ORN)  text(6, 140, "L/R STEP   A+UP/DN SEMITONE   A+L/R OCTAVE", COL_DIM, 1);
+    // HINT LINES ARE HARD-LIMITED TO 40 CHARACTERS. FONT_ADV is 6 px into a 240 px screen, and
+    // glyph() clips silently at the right edge rather than wrapping - so an over-long hint simply
+    // loses its tail with nothing to say it has. 40 fits only from x=0; from the usual x=6 it is
+    // 39. Both of the lines below that start at 0 do so because they need the fortieth column.
+    if (g_page == PAGE_MIX)  text(6, 140, "L/R CHANNEL   A+UP/DN LEVEL  A+L/R PAN", COL_DIM, 1);
+    if (g_page == PAGE_ORN)  text(0, 140, "L/R STEP  A+UP/DN SEMITONE  A+L/R OCTAVE", COL_DIM, 1);
     if (g_page == PAGE_DRUM) {
         // Two short lines rather than one that runs off the right edge.
         text(6, 124, "ANY INPUT GOING HIGH FIRES ITS SOUND.", COL_DIM, 1);
-        text(6, 136, "DRUMS BORROW CH3 AND CH4. SQUARES STAY FREE.", COL_DIM, 1);
+        text(6, 136, "DRUMS BORROW CH3 AND CH4. SQUARES FREE.", COL_DIM, 1);
     }
     if (g_page == PAGE_CAL)  text(6, 140, "GBA PSG VOICE   BY ANDY JENKINSON 2026", COL_DIM, 1);
-    if (g_page == PAGE_MEM)  text(6, 140, "D-PAD PICKS A SLOT.   A+UP SAVES.   A+DOWN LOADS.", COL_DIM, 1);
+    if (g_page == PAGE_MEM)  text(0, 140, "D-PAD PICKS SLOT. A+UP=SAVE. A+DOWN=LOAD", COL_DIM, 1);
     if (g_page == PAGE_CHAN) text(6, 138, "D-PAD MOVES   A+UP/DN VALUE   A+L/R x8", COL_DIM, 1);
 }
 
