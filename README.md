@@ -6,65 +6,204 @@ over the pulse jacks using BIOS **Multiboot**, then streams its inputs down a li
 GBA makes the sound on its own PSG hardware, out of its own headphone jack, and carries the
 whole editor — eleven pages — on its own screen.
 
+No cartridge, no flashcart, no modification to the console. The program is uploaded from the
+module every time you switch on, in about six seconds.
+
 **The division of labour is the design.** The Workshop senses; the GBA is the instrument. This
-side reads seven inputs and sends them raw; the GBA owns pitch tracking, the modulation matrix,
+side reads eight inputs and sends them raw; the GBA owns pitch tracking, the modulation matrix,
 the envelopes, the ornaments, the drums and the UI. That is why the on-screen editor costs no
 protocol: re-mapping Audio In 1 from detune to vibrato is a table write in GBA RAM, not a
 firmware rebuild. Had the mapping lived on the Workshop side, every edit page would have needed
 its own downstream opcode.
 
-> **Status: working on hardware.** Boots, plays, edits, and stores patches on the card.
-> **Testing it for the first time? Work down [`BENCH.md`](BENCH.md)** — each step isolates one
-> thing, so a failure tells you where rather than just that.
->
-> Bring-up was not straightforward. **Read
-> [`diagnostics/POSTMORTEM.md`](diagnostics/POSTMORTEM.md)** before touching the transport.
+---
 
-## Wiring
+# Part 1 — Getting connected
 
-Wire a bare GBA link socket to the module's pulse jacks, **common ground**:
-
-| GBA pin | Workshop jack | RP2040 GPIO | Direction | Series R |
-|---------|---------------|-------------|-----------|----------|
-| 5 SC (clock) | Pulse Out 1 | GPIO 8 | RP2040 → GBA (master) | **1 kΩ** |
-| 3 SI (MOSI)  | Pulse Out 2 | GPIO 9 | RP2040 → GBA | **1 kΩ** |
-| 2 SO (MISO)  | Pulse In 1  | GPIO 2 | GBA → RP2040 | **none** |
-| 6 GND        | ground      | —      | common | — |
-
-Pins 1 (VCC — an output the *GBA* sources) and 4 (SD, unused in normal/SIO32) stay
-disconnected. The 1 kΩ resistors go on the two lines **we drive**: the Workshop pulse outputs
-swing ~6 V into 3.3 V inputs. Never put one in series with SO — it fights the pull-up that
-biases the Pulse In 1 transistor stage.
-
-> **Many GBA link cables CROSS SO/SI between their two ends.** If yours does, swap the two data
-> wires at the Workshop end (SC and GND stay put). Do not guess — flash
-> `diagnostics/cablecheck.uf2` and run MODE 0, which listens on Pulse In 1 and Pulse In 2 at once
-> and reports which wire actually carries the GBA's SO. See
-> [`diagnostics/CABLES.md`](diagnostics/CABLES.md).
-
-Power the **Computer first, then the GBA** — the console only syncs if the master is already
-clocking when it boots. Cartridge-less, on the logo screen. The upload takes about six seconds.
-
-**Power-cycle the GBA whenever you reflash the Workshop.** A console already running a payload
-never answers a multiboot sync, so the host sits in its retry loop for ever: LED 0 blinking,
-LED 1 lit (NoGBA), and no Workshop data reaching the screen.
-
-## Playing it
-
-Patch the GBA's **headphone jack** into the rack. It is around 1 Vpp against Eurorack's ~10 Vpp,
-so expect it to be quiet. The original GBA (AGB-001) and the Game Boy Micro have a headphone
-socket; the **GBA SP has none** and needs the official SP adapter.
-
-### The default patch
-
-It boots playing something. A hard-panned square pair with a shimmer over the top, and **the
-module's own switch triggers it** — no patch cables needed to hear it work.
+## What you need
 
 | | |
 |---|---|
-| **Channel 1** | left, 50% duty, 10 ms attack, fast portamento |
-| **Channel 2** | right, 25% duty, 250 ms attack, no portamento, +2 detune |
-| **Channel 3** | both, sine on a permanent octave trill, level under the Main knob |
+| **A Game Boy Advance** | An original **AGB-001** or a **Game Boy Micro**. Both have a headphone socket. **The GBA SP does not** — it needs Nintendo's SP headphone adapter, which occupies the charging port. A DS or DS Lite will not work: they have no link port of this kind. |
+| **No cartridge** | Multiboot needs the slot **empty**. The console must sit on the Nintendo logo screen. |
+| **A link cable to sacrifice** | See below. You are going to cut one end off. |
+| **2 × 1 kΩ resistors** | Any tolerance. These are not optional. |
+| **A way to terminate it** | A breakout board, a female link socket, or bare wires into your patch points. |
+
+## Making the link cable
+
+This is the only part of the build that can go wrong quietly, so it is worth doing carefully.
+
+### Use a Game Boy Color link cable
+
+**Get a Game Boy Color / Game Boy Pocket link cable rather than a third-party GBA one.** The
+connector has been the same small six-pin part since the Game Boy Pocket, so a GBC cable plugs
+straight into a GBA — and, crucially, **GBC cables are normally 6-core**: every pin in the
+connector has a wire behind it.
+
+That is the whole reason to prefer one. Third-party GBA cables are wildly inconsistent: many
+carry only the three or four conductors that particular cable's intended use needed, and which
+three varies between production runs of the same product. If the conductor you need is simply
+absent, no amount of measuring will find it, and the fault looks exactly like bad wiring.
+
+With six cores you know every signal is there before you start. You still have to *find* which
+is which — see the crossover note below — but you are looking for something that exists.
+
+> The original DMG-era cable, with the big chunky connector, will not fit. You want the small
+> connector introduced with the Game Boy Pocket.
+
+### The socket, and how it is numbered
+
+Six pins in two rows of three. The shell is a hexagon with an asymmetric **lump**; pins 1 and 2
+sit at the lump end. **The numbering mirrors between plug and socket** — the single easiest
+thing here to get wrong.
+
+```
+      PLUG (contacts toward you)          SOCKET (looking into the GBA)
+    ┌──────────────────────────┐      ┌──────────────────────────┐
+    │    1    3    5           │      │           5    3    1    │
+    │        ╱▔▔▔╲             │      │            ╱▔▔▔╲         │
+    │    2    4    6           │      │           6    4    2    │
+    └──────────────────────────┘      └──────────────────────────┘
+         lump at the 1/2 end               lump mirrors too
+```
+
+Anchor on the lump, never on "left" or "right" — it is the one feature that survives the
+connector being held either way up.
+
+### Wiring
+
+All directions are **from the GBA's point of view**, which is the only role we drive it in
+(multiboot slave).
+
+| GBA pin | Signal | Workshop jack | RP2040 GPIO | Direction | Series R |
+|---------|--------|---------------|-------------|-----------|----------|
+| **5** | SC (clock) | Pulse Out 1 | GPIO 8 | RP2040 → GBA | **1 kΩ** |
+| **3** | SI (MOSI)  | Pulse Out 2 | GPIO 9 | RP2040 → GBA | **1 kΩ** |
+| **2** | SO (MISO)  | Pulse In 1  | GPIO 2 | GBA → RP2040 | **none** |
+| **6** | GND        | ground      | —      | common | — |
+| 1 | VCC +3.3 V | **nothing — tape it off** | — | *GBA output* | — |
+| 4 | SD | nothing | — | unused in SIO32 | — |
+
+**Pin 1 is an output the GBA sources**, not a supply input. Leave it floating. Pin 4 is unused
+in the normal/SIO32 mode multiboot runs in.
+
+### The two resistors, and the one that must not be there
+
+**1 kΩ in series on SC and SI.** The Workshop's pulse outputs swing to about 6 V; the GBA's
+inputs are 3.3 V logic. The resistor, together with the GBA's own clamp diode, limits the
+current into the console. Skipping these is how you damage a GBA.
+
+**No resistor on SO.** This is not an oversight. Pulse In 1 is a transistor gate input with a
+pull-up that biases the stage, and a series resistor fights that pull-up. The GBA drives SO at
+3.3 V into us, which the input handles as it stands.
+
+### Terminating it
+
+Three options, in descending order of tidiness:
+
+1. **A breakout PCB.** Andy uses
+   [this OSH Park shared project](https://oshpark.com/shared_projects/srSgm3Yj), with the two
+   1 kΩ resistors soldered onto the board. Solder the cut cable to one side, patch leads to the
+   other, and the resistors are permanently in the right place where you cannot forget them.
+2. **A female link socket** on stripped board, cable into it, resistors inline.
+3. **Bare wires**, resistors soldered inline and heatshrunk. Works; label everything, because
+   the wire colours mean nothing.
+
+Whichever you choose, **put the resistors where they cannot be left out by accident.** A
+breakout that is only correct when you remember to add them in the patch is a breakout that will
+eventually be wrong.
+
+### Before you plug a console in
+
+Everything powered off, meter on continuity:
+
+1. **Buzz each conductor through to a named pin on the intact plug** and write down the colour.
+   Wire colours are not standardised — not even between official Nintendo production runs — so
+   the table you fill in for *your* cable is the only record worth trusting.
+2. **Buzz every pair against every other pair.** A short between SC and GND, or between SI and
+   SO, looks exactly like "the handshake never syncs".
+3. **Confirm common ground.** With both units powered, measure DC from Computer ground to GBA
+   ground: it must read ~0 V. If the grounds are not common, every other reading you take is
+   meaningless. A real ground wire through pin 6 is far better than borrowing the headphone
+   jack's sleeve.
+4. **Check the levels with the module running.** SC, SI and SO should all sit within 0–3.3 V,
+   with SC and SI measured *after* their series resistors. Nothing should go negative.
+
+### The crossover — measure it, do not reason about it
+
+**Peer-to-peer link cables generally swap SO and SI between their two ends**, so the pin that
+carries SO at the end you kept depends on which end you kept — and you cannot tell the two ends
+apart by eye. Published sources genuinely disagree about the details.
+
+Do not reason about it. **Flash `diagnostics/cablecheck.uf2` and run MODE 0.** It listens on
+Pulse In 1 and Pulse In 2 at the same time and reports which wire actually carries the GBA's SO.
+If it turns out crossed, swap the two data wires at the Workshop end; SC and GND stay put.
+
+This is worth the five minutes. The failure it prevents is silent: everything looks wired, SI
+and SO are simply transposed, and the GBA never sees a valid sync word.
+
+Exhaustive continuity tables and notes on specific cables are in
+[`diagnostics/CABLES.md`](diagnostics/CABLES.md).
+
+## First power-up
+
+**Order matters.** Power the **Computer first, then the GBA**. The console only syncs if the
+master is already clocking when it boots.
+
+1. Flash `gba_link.uf2` to the Workshop Computer.
+2. Remove any cartridge from the GBA. Connect the cable.
+3. Power the Workshop. **LED 0 blinks** — it is looking for a console.
+4. Switch the GBA on. It shows the Nintendo logo, then goes **plain green** — that green screen
+   is the payload's own code running, and is your proof the upload worked.
+5. **LEDs 1–5 sweep as a progress bar** for about six seconds.
+6. The GBA lands on the performance screen. **LED 0 goes solid.** Push the module's switch down
+   and you should hear a note.
+
+**Power-cycle the GBA whenever you reflash the Workshop.** A console already running a payload
+never answers a multiboot sync, so the host retries for ever. This catches everyone at least
+once — the symptom is LED 0 blinking with LED 1 lit, and it is not a wiring fault.
+
+## If it does not work
+
+While the link is **not** up, LED 0 blinks and LEDs 1–3 report the last multiboot result as a
+three-bit code:
+
+| LEDs lit | Meaning | Look at |
+|---|---|---|
+| **1** | **NoGBA** — nothing answered at all | Power order. Cartridge removed? Is the GBA on the logo screen? Ground. Then the crossover. |
+| **2** | **BadHandshake** — it answered, then the exchange went wrong | Marginal wiring, a missing series resistor, or a poor ground. |
+| **1 + 2** | **TransferError** — a data word's echo did not match | Noise or a bad joint on SI/SC. Check for shorts. |
+| **3** | **CrcMismatch** — it all arrived, but corrupted | As above; usually a marginal connection rather than a wrong one. |
+| **1 + 3** | **BadPayload** | A build problem, not a wiring one. Rebuild the payload. |
+
+**NoGBA is by far the most common, and its most common cause is not wiring** — it is a console
+that was already running the payload from a previous session.
+
+For a step-by-step bring-up that isolates one thing at a time, work down
+[`BENCH.md`](BENCH.md). Each step tells you *where* a failure is rather than just that there is
+one.
+
+---
+
+# Part 2 — Playing it
+
+## Audio
+
+Patch the GBA's **headphone jack** into the rack. It is around 1 Vpp against Eurorack's ~10 Vpp,
+so expect it to be quiet — straight into a mixer channel or the next module's input.
+
+## The default patch
+
+It boots playing something, deliberately: every jack, knob and button does something audible
+from the first note, and **the module's own switch triggers it**, so you can hear it work with
+nothing patched at all.
+
+| | |
+|---|---|
+| **Channel 1** | left, 50 % duty, 10 ms attack, fast portamento |
+| **Channel 2** | right, 25 % duty, 250 ms attack, no portamento, +2 detune |
+| **Channel 3** | both sides, sine on a permanent octave trill, level under the Main knob |
 | **Channel 4** | off — the DRUM page is where noise earns its place |
 
 The pair arrives from different sides at different times, which is most of why it sounds wide.
@@ -84,41 +223,46 @@ The pair arrives from different sides at different times, which is most of why i
 The D-pad ornaments apply to the melodic pair only, so channel 3 keeps its trill underneath
 while the lead switches figures. Up and Down loop; Left and Right are one-shots.
 
-CV In 1 and both Audio Ins are deliberately unassigned — nothing should move that you did not
-patch. The MAP page is where you give them a job.
+**Pulse In 2, CV In 1 and both Audio Ins are deliberately unassigned** — nothing should move that
+you did not patch. The MAP page is where you give them a job.
 
-### Module panel
+## The panel
 
 | Jack | Default role | Re-assignable? |
 |------|--------------|----------------|
 | **CV In 2** | 1V/oct pitch | yes, MAP page |
 | **Pulse In 2** | gate / trigger | TRIG page |
-| **CV In 1** | pulse duty (timbre) | yes, MAP page |
-| **Audio In 1** | channel-2 detune | yes, MAP page |
-| **Audio In 2** | channel-4 level | yes, MAP page |
-| **Main / X / Y knobs** | unassigned | yes, MAP page |
+| **CV In 1** | unassigned | yes, MAP page |
+| **Audio In 1** | unassigned | yes, MAP page |
+| **Audio In 2** | unassigned | yes, MAP page |
+| **Main knob** | level of channel 3 | yes, MAP page |
+| **X / Y knobs** | attack / release | yes, MAP page |
 | **Switch (down)** | trigger | TRIG page |
 | **Switch (up)** | unassigned modulation | yes, MAP page |
 | **CV Out 2** | quantised pitch, calibrated 1V/oct | — |
 | **CV Out 1** | gate out, 5 V | — |
 | **Audio Out 1 / 2** | GBA **A** and **B** buttons as gates | follows the BTN page |
 
+**CV Out 2 makes the pair a quantiser for the rest of the rack.** ComputerCard calibrates the CV
+*outputs* from the module's EEPROM, so the pitch coming out is in tune without any trimming —
+set a scale on the SET page and the rest of your rack can play from it.
+
+**Audio Out 1 and 2 send your performance gestures back out.** Mult A into another module's
+trigger input and it follows your fingers.
+
 **LEDs while the link is up:** 0 link, 1 gate in, 2 note sounding, 3 editing, 4+5 edit page as a
 binary pair.
 
-**LEDs while it is not:** LED 0 blinks. During an upload, LEDs 1–5 are a five-segment progress
-bar. Idle or failed, LEDs 1–3 are the last multiboot result as a 3-bit code — **1** NoGBA,
-**2** BadHandshake, **3** TransferError, **4** CrcMismatch, **5** BadPayload.
+---
 
-### GBA controls
+# Part 3 — The editor
 
-Every button is re-assignable on the BTN page. Out of the box: D-pad up/down octave, left/right
-detune, **L**/**R** cycle the square duties, **A** trigger, **B** hold. **START** opens the
-editor.
+**START opens the editor**, and lands on **MEM**. Recalling a patch is the one editor action
+that happens mid-performance, so it is one gesture away rather than eight presses of SELECT.
 
 **Inside the editor no button carries its performance meaning** — not trigger, not hold, not the
-mapped D-pad actions. Those belong to the performance screen. HOLD set before you enter still
-holds, so latch a drone in PLAY and then go and edit it.
+mapped D-pad actions. Those belong to the performance screen. HOLD set *before* you enter still
+holds, so you can latch a drone in PLAY and then go and edit it while it sounds.
 
 | | |
 |---|---|
@@ -128,72 +272,171 @@ holds, so latch a drone in PLAY and then go and edit it.
 | **SELECT** + Left/Right | change page — hold it down to run through them quickly |
 | **START** | back to the performance screen |
 
-**START opens the editor on MEM.** Recalling a patch is the one editor action that happens
-mid-performance, so it is one gesture away rather than eight presses of SELECT+Right.
+## MEM — sixteen patch slots
 
-### The eleven pages
+The grid is the page. **D-pad picks a slot** — left/right by one, up/down by eight.
+**A + Up saves. A + Down loads.** A progress bar runs during the transfer; a slot that holds
+nothing says so rather than loading silence.
 
-| Page | What it holds |
-|------|---------------|
-| **MEM** | sixteen patch slots on the card. A+Up saves, A+Down loads. **Where START lands** |
-| **CHAN** | all four channels side by side: output, semitone, ornament, timbre, detune, noise, sweep |
-| **TRIG** | pin grid — which sources trigger which channel (PU2, the Workshop switch, a GBA button) |
-| **ENV** | per-channel ADSR with a drawn envelope, a live level tick, and per-voice portamento |
-| **MIX** | four faders: level and OFF/L/R/BOTH, with the live envelope drawn inside the set level |
-| **BTN** | what each of the eight GBA buttons does |
-| **MAP** | modulation matrix: eight sources × destination × amount × per-voice tickboxes |
-| **ORN** | ornaments — sixteen-step semitone sequences, edited graphically, with a loop/end marker |
-| **DRUM** | a drum sound per input; any input going high fires it. Borrows channels 3 and 4 |
-| **CAL** | **CV input scale and offset trim**, base note, master volume, PSG level, link mode |
-| **SET** | master tuning in cents, key, scale (19 of them), octave, user-scale editor |
-
-**The CAL page is not filler.** ComputerCard calibrates the CV *outputs* from the module's
-EEPROM, so the quantised pitch out is in tune for free — but there is **no calibration for the
-CV inputs**, so 1V/oct tracking on CV In 2 depends on a scale constant that has to be trimmed.
-Doing that on a screen with a live note readout beside it, rather than by recompiling, is
-exactly what having a display is for. It also shows the link's traffic counters, which separate
-"the host is not sending" from "the values are not being updated".
-
-**Triggering is a grid, not a switch.** Channel 1 can fire from the Workshop's momentary switch
-*and* Pulse In 2 while channel 2 fires from the switch only. A channel wired to nothing is
-deliberately silent, and HOLD does not override that.
-
-**Drums live on the wavetable and noise channels, so both squares stay melodic.** Pitched drums
-play on channel 3 because it can hold an arbitrary waveform — a kick has a body instead of being
-a square with a fast decay — and its period sweeps like the squares do. Its one weakness, four
-volume steps, is sidestepped by scaling the wavetable itself rather than using the volume
-register. No Direct Sound and no DMA: real sample playback would need a timer, the FIFOs, and
-sample data in an already six-second payload.
-
-**Channel 3's level is applied by scaling its wavetable, not by its volume register.** The
-hardware register offers only mute / 25 / 50 / 100 %, which is far too coarse for an envelope —
-scaling the samples gives a full sixteen steps, the same trick the drum engine uses.
-
-**The noise channel tracks pitch, but only in octaves.** Its frequency is
-`524288 / r / 2^(s+1)`, so the shift field steps by a factor of two and nothing finer — the
-eight divider ratios do subdivide an octave, but unevenly, so there is no honest chromatic
-mapping to be had. Tick channel 4 on a PITCH mapping and it follows an octave at a time, which
-is what tuned noise percussion has always meant on this hardware. `N PITCH` on the CHAN page and
-the `N PITCH` destination still give you direct control.
-
-**Ornament mappings are switches, not depths.** When a MAP destination is `ORNMNT` the amount
-column names the *slot*; the source is on above halfway. There is no forty per cent of an
-arpeggio.
-
-## Patches
-
-Sixteen slots live in the last flash sector of the RP2040 — 256 bytes each, one sector, because
-the sector is the erase unit. The GBA's patch is in EWRAM and is gone the moment the console is
+Slots live in the RP2040's flash, not the GBA — the console's RAM is wiped every time it is
 switched off, so the Workshop is where a patch has to persist.
 
-A transfer is one byte per link word, each carrying its own index, so a dropped word leaves a
-hole the receiver can see rather than silently shifting everything after it. A save repeats the
-whole block until the host acknowledges; the host only ever commits a complete one.
+> **Saving clicks the audio.** Erasing flash stops execution-in-place, so the 48 kHz callback is
+> parked for the few milliseconds the write takes. That is the price of a deliberate action, and
+> the reason patch storage is not something the audio path does.
 
-**Saving clicks the audio.** Erasing flash stops XIP, so core 0 is parked in a RAM handler with
-interrupts off for the few milliseconds the write takes, and the 48 kHz callback does not run.
-That is the price of a deliberate action, and the reason patch storage is not something the
-audio path does.
+> **A + Up saves to whatever slot the cursor is on.** Since START now lands here, be aware that
+> START followed by an idle A + Up will overwrite.
+
+## CHAN — all four channels at once
+
+A grid: ten parameters down, four channels across. `[X]` marks a cell that does not apply to
+that channel — detune is channel 2's alone, the sweep belongs to channel 1, noise pitch and
+ratio to channel 4.
+
+| Row | |
+|---|---|
+| **OUTPUT** | OFF / L / R / BOTH |
+| **SEMITONE** | ±24, per channel — the pitched three |
+| **ORNAMENT** | OFF, slots 1–6, or CV (chosen live by a mapping) |
+| **TIMBRE** | one idea, four spellings: duty for the squares, waveform for channel 3, noise type for channel 4 |
+| **DETUNE** | channel 2 only, in 1/16-semitone steps |
+| **N PITCH / N RATIO** | channel 4's noise generator |
+| **SWP TIME / DIR / DEPTH** | channel 1's frequency sweep |
+
+Channel 3's twelve waveforms: SINE, TRI, SAW UP, SAW DN, SQUARE, PULSE 12, PULSE 25, ORGAN,
+HALF SIN, BELL, VOX, STEPS.
+
+## TRIG — what fires what
+
+A pin grid, not a switch: three trigger sources (**PU2**, the Workshop **SW**itch, a mapped GBA
+**BTN**) against four channels. Tick any combination.
+
+Channel 1 can fire from the switch *and* Pulse In 2 while channel 2 fires from the switch only.
+A channel wired to nothing is deliberately silent, and HOLD does not override that.
+
+## ENV — per-channel ADSR
+
+`CHANNEL`, `ATTACK`, `DECAY`, `SUSTAIN`, `RELEASE`, `PORTAMENTO`, `RETRIGGER`, with the envelope
+drawn as you edit it and a live tick showing where the note currently sits.
+
+Times run 0, 5, 10, 20, 35, 60, 100, 160, 250, 400, 650 ms, then 1, 1.6, 2.5, 4, 6 seconds —
+spread over what you would actually dial rather than a plain power-of-two ladder.
+
+**PORTAMENTO is per voice**, which is what lets channel 1 slide while channel 2 steps.
+
+## MIX — levels and panning
+
+Four faders: level 0–15 and OFF / L / R / BOTH, with the live envelope drawn *inside* the set
+level so you can see the envelope working against the ceiling you gave it.
+
+## BTN — what the eight GBA buttons do
+
+One row each for A, B, L, R and the four D-pad directions. Twenty-five actions. The ones whose
+scope is not obvious from the name:
+
+| Action | Applies to |
+|---|---|
+| `TRIGGER` / `HOLD` | whichever channels tick **BTN** on the TRIG page |
+| `ORN SLOT 1`–`6` | **channels 1 and 2 only** — the melodic pair, so channel 3 keeps its own figure underneath |
+| `SWEEP TIME` | channel 1 only; cycles 0–7, one step per press, 0 being off |
+| `DUTY 1` / `DUTY 2` | that square, cycling 12.5 → 25 → 50 → 75 % |
+| `DUTY BOTH` | both squares together, so they stay locked rather than drifting apart |
+| `OCT +` / `OCT -` | **global** (±3) — every channel moves, including noise if it tracks pitch |
+| `ORNMNT +` / `-` | **all four channels**, each stepped by one from wherever it is, so relative offsets survive |
+| `SEMI +` / `-` | **all four channels** |
+| `CH1`–`CH4 ON/OFF` | mutes that channel |
+
+These edit the patch itself, so they survive into a save — they are real changes, not temporary
+performance offsets.
+
+## MAP — the modulation matrix
+
+Eight sources, each with a destination, an amount, and per-voice tickboxes.
+
+**Sources:** CV 1, CV 2, AUD 1, AUD 2, MAIN, KNOB X, KNOB Y, SWITCH.
+
+**Destinations:** PITCH, LEVEL, DUTY, DETUNE, GLIDE, DECAY, SWEEP, N PITCH, ORNMNT, ORNRATE,
+SCALE, KEY, ATTACK, RELEASE.
+
+The four jacks are bipolar around 0 V; the three knobs are unipolar and are centred internally,
+so one amount control means the same thing for both. **The switch is neither** — UP is full,
+MIDDLE and DOWN are zero. Down is already a trigger gesture, and giving it a modulation value
+too would mean every trigger also yanked whatever it was mapped to.
+
+For PITCH, an amount of **+32 is unity 1V/oct**.
+
+**Ornament mappings are switches, not depths.** When the destination is `ORNMNT` the amount
+column names the *slot*, and the source is on above halfway. There is no forty per cent of an
+arpeggio.
+
+## ORN — ornaments
+
+Six slots of up to sixteen semitone offsets, edited graphically. `SLOT`, `LENGTH`, `RATE`,
+`MODE` (loop while held, or one-shot then hold the last step) and the step editor.
+
+On the steps row, **L/R moves between steps, A + Up/Down moves by a semitone, A + L/R by an
+octave.** A channel set to `CV` on the CHAN page takes whichever slot a mapping selects, so a
+knob or a gate can switch figures live.
+
+## DRUM — noise and percussion
+
+`DRUM MODE`, `THRESHOLD`, then one row per input: AUD 1, AUD 2, CV 1, CV 2, PU 2, SWITCH. Any
+input going high fires its sound. Eleven presets: KICK, SNARE, CL HAT, OP HAT, TOM HI, TOM LO,
+RIM, CLAP, COWBELL, ZAP.
+
+**Drums borrow channels 3 and 4, so both squares stay melodic** — two squares is a lead and a
+bass, which is the better half of the machine to keep.
+
+## CAL — trimming, and the credit line
+
+`CV SCALE`, `CV OFFSET`, `BASE NOTE`, `MASTER L`, `MASTER R`, `PSG LEVEL`, `LINK`.
+
+**This page is not filler.** The CV *outputs* are factory-calibrated from EEPROM, but there is
+**no calibration for the CV inputs** — so 1V/oct tracking on CV In 2 depends on a scale constant
+that has to be trimmed once, by you. Play octaves in, watch the live note readout on this page,
+and adjust `CV SCALE` until they land. `BASE NOTE` sets what 0 V means (C2 by default).
+
+Doing that on a screen with a live readout beside it, rather than by recompiling, is exactly what
+having a display is for.
+
+## SET — tuning, key and scale
+
+`TUNING` (master, in cents), `KEY`, `SCALE`, `OCTAVE`, and the user-scale editor.
+
+Nineteen scales: CHROMATIC, MAJOR, DORIAN, PHRYGIAN, LYDIAN, MIXOLYD, MINOR, LOCRIAN, HARM MIN,
+PENTA MAJ, PENTA MIN, BLUES, HIRAJOSHI, IN SEN, WHOLE, then USER 1–4.
+
+**CHROMATIC means the quantiser is off.** Any other scale snaps incoming pitch to the nearest
+degree — and because the quantiser snaps the *target*, portamento still glides into it rather
+than being stepped away.
+
+To edit a user scale, select USER 1–4 and move to `SCALE NOTES`: the twelve semitones are drawn
+as a row of toggles.
+
+---
+
+# Part 4 — Reference
+
+## Musical behaviour worth knowing
+
+**The noise channel tracks pitch, but only in octaves.** Its frequency is `524288 / r / 2^(s+1)`,
+so the shift field steps by a factor of two and nothing finer — the eight divider ratios do
+subdivide an octave, but unevenly, so there is no honest chromatic mapping to be had. Tick
+channel 4 on a PITCH mapping and it follows an octave at a time, which is what tuned noise
+percussion has always meant on this hardware.
+
+**Channel 3's level is applied by scaling its wavetable, not its volume register.** The hardware
+register offers only mute / 25 / 50 / 100 %, far too coarse for an envelope; scaling the samples
+gives a full sixteen steps. If a control on channel 3 ever seems to do nothing, suspect its
+volume register first — it is coarser than anything else on the instrument.
+
+**Sweep and a software envelope do not fully coexist.** Every envelope step retriggers the
+channel, and a retrigger reduces channel 1's sweep — so a sustained level is where a sweep gets
+to run. This is a property of the hardware, not a bug.
+
+**No Direct Sound, no DMA.** Real sample playback would need a timer, the FIFOs, and sample data
+in an already six-second payload.
 
 ## How it works
 
@@ -213,7 +456,22 @@ audio path does.
 - **PIO SPI with baked-in inversion.** The pulse jacks are hardware-inverted and GPIO 8/9/2
   aren't hardware-SPI pins, so the transfer is a PIO state machine (`gba_spi.pio`, mode 3,
   MSB-first, 32-bit). **Pulse In 1 inverts** — established by the GBA's own reply, not by
-  inference; see the post-mortem.
+  inference.
+
+> **Bring-up was not straightforward.** If you are going to touch the transport, read
+> [`diagnostics/POSTMORTEM.md`](diagnostics/POSTMORTEM.md) first. Several days went into faults
+> that turned out to be in the diagnostics rather than the hardware.
+
+## Patch storage
+
+Sixteen slots in the last flash sector of the RP2040 — 256 bytes each, one sector, because the
+sector is the erase unit. A transfer is one byte per link word, each carrying its own index, so a
+dropped word leaves a hole the receiver can see rather than silently shifting everything after
+it. A save repeats the whole block until the host acknowledges; the host only ever commits a
+complete one.
+
+Patches carry a version. A patch saved by an older firmware whose layout has since changed is
+**rejected** with `BAD DATA - NOT LOADED` rather than loaded as garbage.
 
 ## Building
 
@@ -251,6 +509,13 @@ which the GBA BIOS validates. See [`payload/README.md`](payload/README.md).
 | `payload/diag.c` | Link-characterisation screens (linkrate / bandwidth) |
 | `ComputerCard.h` | Vendored HAL (Chris Johnson's library, with Andy's fixes) |
 
+| Document | |
+|---|---|
+| [`BENCH.md`](BENCH.md) | Step-by-step bring-up. **Start here if it does not work** |
+| [`diagnostics/CABLES.md`](diagnostics/CABLES.md) | Cable continuity tables, per cable type |
+| [`diagnostics/POSTMORTEM.md`](diagnostics/POSTMORTEM.md) | What went wrong during bring-up, and how each fault was caught |
+| [`diagnostics/TESTPLAN.md`](diagnostics/TESTPLAN.md) | Bench procedure |
+
 ## Credits & references
 
 By **Andy Jenkinson**, 2026. Built on Chris Johnson's ComputerCard HAL for Tom Whitwell's
@@ -262,3 +527,5 @@ in [copyrat90/gba-pico-gamepad](https://github.com/copyrat90/gba-pico-gamepad); 
 follows the Raspberry Pi
 [pico-examples SPI](https://github.com/raspberrypi/pico-examples/tree/master/pio/spi) CPHA=1
 program. Register details throughout from [GBATEK](https://problemkaputt.de/gbatek.htm).
+
+MIT licensed.

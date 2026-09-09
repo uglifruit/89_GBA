@@ -56,12 +56,33 @@ Verified against `../gba_spi.h:15-17`, `../main.cpp` and `../gba_spi.pio` — al
 
 ## Which cable is which
 
-### A. GameCube → GBA cable (DOL-011) — **preferred**
+### A. Game Boy Color / Game Boy Pocket link cable — **preferred**
+
+**Get one of these rather than a third-party GBA cable.** The connector has been the same
+six-pin part since the Game Boy Pocket, so it plugs straight into a GBA — and these cables are
+normally **6-core**: every pin in the connector has a wire behind it.
+
+That is the whole reason to prefer one. Third-party GBA cables are wildly inconsistent: many
+carry only the three or four conductors that particular cable's intended use needed, and which
+three varies between production runs of the same product. **If the conductor you need is simply
+absent, no amount of measuring will find it** — and the fault looks exactly like bad wiring.
+With six cores you know every signal is there before you start.
+
+It is still a peer-to-peer cable, so **assume SO and SI are swapped between the ends** and
+settle it by measurement (`cablecheck.uf2` MODE 0) rather than by reasoning. Buzz each of the
+six conductors through to a named pin on the intact plug and fill in the table at the top.
+
+> The original DMG-era cable, with the big chunky connector, will not fit. You want the small
+> connector introduced with the Game Boy Pocket.
+
+### B. GameCube → GBA cable (DOL-011)
 
 **Straight-through on the GBA side.** No crossover: the GameCube is unambiguously the
 master, so the GBA plug's pins run to the GC plug without a swap. Cut the GameCube end off
-and you have an un-swapped breakout of the GBA connector. This is the cable that removes the
-whole crossover problem, which is why it is worth using over a GBA-to-GBA cable.
+and you have an un-swapped breakout of the GBA connector, which removes the crossover question
+entirely. Its drawback against a GBC cable is core count: the real DOL-011 has only three
+conductors plus a shield (bench notes below), so ground rides the braid and there is no spare if
+a conductor is damaged.
 
 Check continuity from each stripped wire to the GBA plug's pins:
 
@@ -86,7 +107,7 @@ Bench notes on the real DOL-011 (2026-09-03):
 - The GameCube end's pin numbering does **not** match GBA pin numbering. Do not infer names
   from it; buzz each conductor through to the **GBA plug's** pins and label by that.
 
-### B. GBA ↔ GBA link cable (AGB-005) — **the crossover trap**
+### C. GBA ↔ GBA link cable (AGB-005) — **the crossover trap**
 
 **Pins 2 and 3 are SWAPPED between the two ends.** SO at one end arrives at SI on the other.
 It also has a distinguishable "parent" and "child" plug, and you cannot reliably tell them
@@ -104,7 +125,7 @@ kept. So:
 The failure this causes is silent: everything looks wired, and SI/SO are simply transposed,
 so the GBA never sees a valid sync word.
 
-### C. Bare/DIY connector or a chopped unknown cable
+### D. Bare/DIY connector or a chopped unknown cable
 
 No assumptions available at all. Buzz all six pins to whatever conductors exist, fill in the
 top table, and additionally verify the socket's **physical orientation** — confirm pin 1 by
