@@ -1,4 +1,4 @@
-# 89_GBA — Claude working notes
+# GBA — Claude working notes
 
 GBA Multiboot link for the Music Thing Modular **Workshop Computer** (RP2040-based Eurorack
 module). Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot,
@@ -10,6 +10,9 @@ would take a full re-investigation to rediscover.
 
 ## What this is
 
+- **The applet is called GBA**, not "89_GBA". The number is the card ID and belongs to the
+  release PATH, never to the name: it appears in `releases/89_GBA/` and nowhere else. Titles,
+  headings and `info.yaml` all say GBA.
 - **Standalone repo** (`uglifruit/89_GBA`), but the applet is a **Workshop Computer release**
   and is intended to be PR'd into `TomWhitwell/Workshop_Computer` under `releases/89_GBA/`
   later. Keep it self-contained (vendored `ComputerCard.h`, no external path deps) so that
@@ -21,12 +24,12 @@ would take a full re-investigation to rediscover.
 
 The vendored HAL here is a **pure superset of upstream v0.3.0** (+18 lines, nothing removed),
 carrying two fixes Andy developed across his projects. The canonical copy lives in
-`91_Chorgan` / `95_OffAir` (byte-identical); `89_GBA` matches them. `96_Cathode` / `60_Markov`
+`91_Chorgan` / `95_OffAir` (byte-identical); this one matches them. `96_Cathode` / `60_Markov`
 still carry **stock** v0.3.0 — do not copy their HAL over this one.
 
 1. **Power-on click removal.** Pre-fills the SPI DAC buffers with 0V "silence" words before
    the first DMA transfer, so the first output is silence rather than uninitialised RAM.
-   Applies to any applet using audio/CV out (89_GBA does).
+   Applies to any applet using audio/CV out (this one does).
 2. **ADC channel-alignment fix.** Stops the ADC (`ADC_CS_START_MANY`) and drains the FIFO
    before touching AINSEL, guaranteeing the DMA burst always restarts on channel 0. Without
    it, an in-progress conversion lands as `ADC_Buffer[n][0]` and shifts the whole burst by

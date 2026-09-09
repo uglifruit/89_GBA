@@ -198,6 +198,10 @@ ability to re-measure:
 | `diagnostics/linkrate.uf2` | how many words/s the live link sustains cleanly |
 | `diagnostics/cablecheck.uf2` | which wire actually carries the GBA's SO |
 
+**These are sources, not binaries — build them first.** From `diagnostics/`:
+`cmake -G Ninja -B build -S .` then `cmake --build build --target cablecheck` (or `mbrate`,
+`linkrate`), which leaves the `.uf2` in `diagnostics/build/`.
+
 ## The one habit worth keeping
 
 **When a measurement contradicts something already known to work, doubt the measurement

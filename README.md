@@ -1,10 +1,10 @@
-# 89_GBA — GBA PSG Voice
+# GBA — PSG Voice
 
 Turns the Music Thing Workshop Computer into a **Game Boy Advance link-cable master**, and the
 GBA into a **chiptune synth voice played by the modular**. The module boots a cartridge-less GBA
 over the pulse jacks using BIOS **Multiboot**, then streams its inputs down a live SPI link. The
 GBA makes the sound on its own PSG hardware, out of its own headphone jack, and carries the
-whole editor — eleven pages — on its own screen.
+whole editor on its own screen.
 
 No cartridge, no flashcart, no modification to the console. The program is uploaded from the
 module every time you switch on, in about six seconds.
@@ -24,11 +24,10 @@ its own downstream opcode.
 
 | | |
 |---|---|
-| **A Game Boy Advance** | An original **AGB-001** or a **Game Boy Micro**. Both have a headphone socket. **The GBA SP does not** — it needs Nintendo's SP headphone adapter, which occupies the charging port. A DS or DS Lite will not work: they have no link port of this kind. |
+| **A Game Boy Advance** | An original **AGB-001** or a **GBA SP**.  Note: **The GBA SP does not have a headphone socket** — it needs Nintendo's SP headphone adapter, which occupies the charging port. |
 | **No cartridge** | Multiboot needs the slot **empty**. The console must sit on the Nintendo logo screen. |
-| **A link cable to sacrifice** | See below. You are going to cut one end off. |
+| **A link cable** | See below.  |
 | **2 × 1 kΩ resistors** | Any tolerance. These are not optional. |
-| **A way to terminate it** | A breakout board, a female link socket, or bare wires into your patch points. |
 
 ## Making the link cable
 
@@ -41,13 +40,13 @@ connector has been the same small six-pin part since the Game Boy Pocket, so a G
 straight into a GBA — and, crucially, **GBC cables are normally 6-core**: every pin in the
 connector has a wire behind it.
 
-That is the whole reason to prefer one. Third-party GBA cables are wildly inconsistent: many
+That is the whole reason I prefer one. Third-party GBA cables are wildly inconsistent: many
 carry only the three or four conductors that particular cable's intended use needed, and which
-three varies between production runs of the same product. If the conductor you need is simply
-absent, no amount of measuring will find it, and the fault looks exactly like bad wiring.
+three varies. If the conductor you need is simply
+absent the fault looks exactly like bad wiring.
 
 With six cores you know every signal is there before you start. You still have to *find* which
-is which — see the crossover note below — but you are looking for something that exists.
+is which but you are looking for something that exists.
 
 > The original DMG-era cable, with the big chunky connector, will not fit. You want the small
 > connector introduced with the Game Boy Pocket.
@@ -65,11 +64,9 @@ thing here to get wrong.
     │        ╱▔▔▔╲             │      │            ╱▔▔▔╲         │
     │    2    4    6           │      │           6    4    2    │
     └──────────────────────────┘      └──────────────────────────┘
-         lump at the 1/2 end               lump mirrors too
+         lump at the top
 ```
 
-Anchor on the lump, never on "left" or "right" — it is the one feature that survives the
-connector being held either way up.
 
 ### Wiring
 
@@ -82,73 +79,62 @@ All directions are **from the GBA's point of view**, which is the only role we d
 | **3** | SI (MOSI)  | Pulse Out 2 | GPIO 9 | RP2040 → GBA | **1 kΩ** |
 | **2** | SO (MISO)  | Pulse In 1  | GPIO 2 | GBA → RP2040 | **none** |
 | **6** | GND        | ground      | —      | common | — |
-| 1 | VCC +3.3 V | **nothing — tape it off** | — | *GBA output* | — |
+| 1 | VCC +3.3 V | **nothing — leave it floating** | — | *GBA output* | — |
 | 4 | SD | nothing | — | unused in SIO32 | — |
 
-**Pin 1 is an output the GBA sources**, not a supply input. Leave it floating. Pin 4 is unused
-in the normal/SIO32 mode multiboot runs in.
 
 ### The two resistors, and the one that must not be there
 
 **1 kΩ in series on SC and SI.** The Workshop's pulse outputs swing to about 6 V; the GBA's
 inputs are 3.3 V logic. The resistor, together with the GBA's own clamp diode, limits the
-current into the console. Skipping these is how you damage a GBA.
+current into the console. Skipping these could damage your GBA.
 
-**No resistor on SO.** This is not an oversight. Pulse In 1 is a transistor gate input with a
-pull-up that biases the stage, and a series resistor fights that pull-up. The GBA drives SO at
+**No resistor on SO.** The GBA drives SO at
 3.3 V into us, which the input handles as it stands.
 
 ### Terminating it
 
 Three options, in descending order of tidiness:
 
-1. **A breakout PCB.** Andy uses
+1. **A breakout PCB.** I suggest
    [this OSH Park shared project](https://oshpark.com/shared_projects/srSgm3Yj), with the two
-   1 kΩ resistors soldered onto the board. Solder the cut cable to one side, patch leads to the
-   other, and the resistors are permanently in the right place where you cannot forget them.
+   1 kΩ resistors soldered onto the board. The cable solders to one side and the patch leads
+   to the other, so the resistors are permanently where you cannot forget them.
 2. **A female link socket** on stripped board, cable into it, resistors inline.
 3. **Bare wires**, resistors soldered inline and heatshrunk. Works; label everything, because
    the wire colours mean nothing.
 
-Whichever you choose, **put the resistors where they cannot be left out by accident.** A
-breakout that is only correct when you remember to add them in the patch is a breakout that will
-eventually be wrong.
+Whichever you choose, **put the resistors where they cannot be left out by accident.** 
 
 ### Before you plug a console in
 
-Everything powered off, meter on continuity:
-
-1. **Buzz each conductor through to a named pin on the intact plug** and write down the colour.
+1. **Check each conductor through to a named pin on the intact plug** and write down the colour.
    Wire colours are not standardised — not even between official Nintendo production runs — so
    the table you fill in for *your* cable is the only record worth trusting.
-2. **Buzz every pair against every other pair.** A short between SC and GND, or between SI and
-   SO, looks exactly like "the handshake never syncs".
-3. **Confirm common ground.** With both units powered, measure DC from Computer ground to GBA
-   ground: it must read ~0 V. If the grounds are not common, every other reading you take is
-   meaningless. A real ground wire through pin 6 is far better than borrowing the headphone
-   jack's sleeve.
-4. **Check the levels with the module running.** SC, SI and SO should all sit within 0–3.3 V,
-   with SC and SI measured *after* their series resistors. Nothing should go negative.
+2. **Check every pair against every other pair.** You don't want shorts between pins and ground (which some GBA cables have with one of the pins).
 
 ### The crossover — measure it, do not reason about it
 
+**If you make a dedicated cable by cutting a link cable, beware.**
+
 **Peer-to-peer link cables generally swap SO and SI between their two ends**, so the pin that
 carries SO at the end you kept depends on which end you kept — and you cannot tell the two ends
-apart by eye. Published sources genuinely disagree about the details.
+apart by eye.
 
-Do not reason about it. **Flash `diagnostics/cablecheck.uf2` and run MODE 0.** It listens on
-Pulse In 1 and Pulse In 2 at the same time and reports which wire actually carries the GBA's SO.
-If it turns out crossed, swap the two data wires at the Workshop end; SC and GND stay put.
+TO HELP YOU: **build and flash `cablecheck`, then run MODE 0.** It listens on Pulse In 1 and
+Pulse In 2 at the same time and reports which wire actually carries the GBA's SO.
 
-This is worth the five minutes. The failure it prevents is silent: everything looks wired, SI
-and SO are simply transposed, and the GBA never sees a valid sync word.
+```sh
+cmake -G Ninja -B diagnostics/build -S diagnostics
+cmake --build diagnostics/build --target cablecheck   # -> diagnostics/build/cablecheck.uf2
+```
 
-Exhaustive continuity tables and notes on specific cables are in
+Continuity tables and notes on specific cables are in
 [`diagnostics/CABLES.md`](diagnostics/CABLES.md).
 
 ## First power-up
 
-**Order matters.** Power the **Computer first, then the GBA**. The console only syncs if the
+Power the **Computer first, then the GBA**. The console only syncs if the
 master is already clocking when it boots.
 
 1. Flash `gba_link.uf2` to the Workshop Computer.
@@ -157,12 +143,8 @@ master is already clocking when it boots.
 4. Switch the GBA on. It shows the Nintendo logo, then goes **plain green** — that green screen
    is the payload's own code running, and is your proof the upload worked.
 5. **LEDs 1–5 sweep as a progress bar** for about six seconds.
-6. The GBA lands on the performance screen. **LED 0 goes solid.** Push the module's switch down
+6. The GBA lands on the performance screen. **LED 0 goes solid.** Push the Workshop Computer's momentary switch down
    and you should hear a note.
-
-**Power-cycle the GBA whenever you reflash the Workshop.** A console already running a payload
-never answers a multiboot sync, so the host retries for ever. This catches everyone at least
-once — the symptom is LED 0 blinking with LED 1 lit, and it is not a wiring fault.
 
 ## If it does not work
 
@@ -188,14 +170,21 @@ one.
 
 # Part 2 — Playing it
 
+Well done for getting this far!
+
 ## Audio
 
-Patch the GBA's **headphone jack** into the rack. It is around 1 Vpp against Eurorack's ~10 Vpp,
-so expect it to be quiet — straight into a mixer channel or the next module's input.
+Patch the GBA's **headphone jack** into Eurorack if you wish, but NOTE the headphone ground on
+the GBA SP adapter may short the signal with a shared ground. If so, use a ground-isolating
+stereo audio cable.
+
+Expect it to be **quiet**: around 1 Vpp against Eurorack's ~10 Vpp, so it wants a mixer channel
+or the next module's input rather than going straight to an output.
+
 
 ## The default patch
 
-It boots playing something, deliberately: every jack, knob and button does something audible
+The default patch has every jack, knob and button doing something audible
 from the first note, and **the module's own switch triggers it**, so you can hear it work with
 nothing patched at all.
 

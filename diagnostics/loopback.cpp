@@ -1,4 +1,4 @@
-// loopback.cpp — Link transport diagnostic for 89_GBA.
+// loopback.cpp — Link transport diagnostic for GBA.
 //
 // Two-stage test, selected by the toggle switch:
 //

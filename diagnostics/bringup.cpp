@@ -1,4 +1,4 @@
-// bringup.cpp — Staged, scope-friendly bring-up diagnostic for 89_GBA.
+// bringup.cpp — Staged, scope-friendly bring-up diagnostic for GBA.
 //
 // One tool that walks the hardware bring-up in order. The 3-position SWITCH picks the stage;
 // the LEDs give per-stage status; the SCOPE watches the actual signals on the jacks. Do the

@@ -1,4 +1,4 @@
-// 89_GBA — GBA PSG voice for the Music Thing Workshop Computer
+// GBA — PSG voice for the Music Thing Workshop Computer
 //
 // Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then runs a
 // live SPI link so the GBA is a synth voice played by the modular — audio out of its own

@@ -1,4 +1,4 @@
-# GBA payload (89_GBA)
+# GBA payload
 
 The GBA-side program uploaded into a cartridge-less Game Boy Advance via BIOS Multiboot.
 It is a **PSG synth voice with its own editor**, dependency-free (no libgba, no libc) so it

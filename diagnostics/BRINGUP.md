@@ -1,4 +1,4 @@
-# Hardware bring-up notes (89_GBA)
+# Hardware bring-up notes (GBA)
 
 > # WORKING (2026-09-06) — see [`POSTMORTEM.md`](POSTMORTEM.md)
 > Kept as the accumulated background. Note that several conclusions recorded below as

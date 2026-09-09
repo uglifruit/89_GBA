@@ -1,4 +1,4 @@
-# Link cables and continuity checks (89_GBA)
+# Link cables and continuity checks (GBA)
 
 Bench reference. **Do every check with everything powered off**, before a console is
 connected to the Workshop Computer. Write your findings in the blank column — wire colours
@@ -8,8 +8,9 @@ fill in for *your* cable is the only trustworthy record.
 Related: `TESTPLAN.md` (**the current bench procedure — start there**), `BRINGUP.md` (the
 accumulated background), and the pin map in `../gba_spi.h`.
 
-> **The crossover no longer has to be reasoned about — it can be measured.** Flash
-> `cablecheck.uf2` and run MODE 0: it listens on *both* Pulse In 1 and Pulse In 2 at once and
+> **The crossover no longer has to be reasoned about — it can be measured.** Build `cablecheck`
+> (`cmake -G Ninja -B build -S .` in this directory, then `cmake --build build --target
+> cablecheck`), flash it, and run MODE 0: it listens on *both* Pulse In 1 and Pulse In 2 at once and
 > tells you which socket pin actually carries the GBA's SO. Sources genuinely disagree about
 > how GBA link cables are wired internally, so this is the reliable way to settle it. See
 > `TESTPLAN.md` STEP 1, and STEP 2B for the two-wire swap if it turns out crossed.

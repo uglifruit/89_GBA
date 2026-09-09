@@ -50,8 +50,9 @@ manual: |
   soldered on.
 
   THE CROSSOVER. Peer-to-peer link cables generally swap SO and SI between their two ends, and
-  you cannot tell the ends apart by eye. Do not reason about it: flash diagnostics/cablecheck.uf2
-  and run MODE 0, which listens on Pulse In 1 and Pulse In 2 at once and reports which wire
+  you cannot tell the ends apart by eye. Do not reason about it: build and flash the cablecheck
+  diagnostic (see diagnostics/) and run MODE 0, which listens on Pulse In 1 and Pulse In 2 at
+  once and reports which wire
   actually carries SO. If crossed, swap the two data wires at the Workshop end; SC and GND stay
   put. The failure this prevents is silent - everything looks wired and the GBA simply never sees
   a valid sync word.
@@ -70,8 +71,10 @@ manual: |
   isolates one thing at a time.
 
   SOUND comes out of the GBA's HEADPHONE JACK. It is around 1 Vpp against Eurorack's 10 Vpp, so
-  it will be quiet - straight into a mixer channel. The original GBA and the Game Boy Micro have
-  a headphone socket; the GBA SP does not and needs the official SP adapter.
+  it will be quiet - straight into a mixer channel. The original AGB-001 has a headphone socket;
+  the GBA SP does not and needs the official SP adapter, whose ground can short the signal
+  against a shared ground - use a ground-isolating cable if that happens. The Game Boy Micro
+  uses a different, smaller link connector and needs an adapter to take this cable at all.
 
   PLAYING. It boots playing something: a hard-panned square pair with a sine shimmer over the
   top, triggered by the module's own switch, so it makes a sound with nothing patched. CV In 2 is
