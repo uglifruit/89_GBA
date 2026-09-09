@@ -388,17 +388,39 @@ RIM, CLAP, COWBELL, ZAP.
 **Drums borrow channels 3 and 4, so both squares stay melodic** — two squares is a lead and a
 bass, which is the better half of the machine to keep.
 
-## CAL — trimming, and the credit line
+## CAL — trimming 1V/oct
 
-`CV SCALE`, `CV OFFSET`, `BASE NOTE`, `MASTER L`, `MASTER R`, `PSG LEVEL`, `LINK`.
+`CV SCALE`, `CV OFFSET`, `BASE NOTE`, `MASTER L`, `MASTER R`, `PSG LEVEL`, `CV 2 IN`, `LINK`.
 
-**This page is not filler.** The CV *outputs* are factory-calibrated from EEPROM, but there is
-**no calibration for the CV inputs** — so 1V/oct tracking on CV In 2 depends on a scale constant
-that has to be trimmed once, by you. Play octaves in, watch the live note readout on this page,
-and adjust `CV SCALE` until they land. `BASE NOTE` sets what 0 V means (C2 by default).
+**This page is not filler, and you will need it.** ComputerCard calibrates the CV *outputs* from
+the module's EEPROM, so the quantised pitch coming out is in tune for free — but **there is no
+calibration of any kind for the CV inputs.** 1V/oct tracking on CV In 2 rests on a single
+constant, `CV SCALE`, and it varies with the module.
 
-Doing that on a screen with a live readout beside it, rather than by recompiling, is exactly what
-having a display is for.
+`CV SCALE` is **counts per semitone in 1/16ths**. `CV 2 IN` shows the **live raw count** — the
+exact number the pitch maths works on — and it is what makes an accurate trim possible instead
+of a hunt by ear.
+
+### The two-point trim
+
+1. Patch your pitch source to **CV In 2** and open the CAL page.
+2. Play a low note and read `CV 2 IN`. Call it **L**.
+3. Play a note **exactly two octaves higher** and read it again. Call it **H**.
+4. `CV SCALE` = **16 × (H − L) ÷ 24**, since two octaves is 24 semitones. Two octaves rather
+   than one because the arithmetic error halves.
+5. Dial that in on `CV SCALE` (A + Up/Down steps by 1, A + Left/Right by 8) and re-check by ear.
+
+`CV OFFSET` then moves the whole range without changing its span, and `BASE NOTE` sets what
+0 V means (C2 by default).
+
+> **The shipped default of 207 is a bench measurement from one module, not a specification.**
+> It replaced a value calculated on the assumption that the inputs span ±6 V over the full 4096
+> counts — which turned out to want about 2.2 V per octave in practice, because the ADC keeps
+> substantial over-range headroom either side of the nominal input range. Expect to trim it.
+
+**Nothing on the Workshop side needs changing to fix tracking.** That end sends raw ADC counts
+and nothing else, by design; every part of the pitch calculation lives on the GBA, which is why
+this is a number you can dial rather than a firmware rebuild.
 
 ## SET — tuning, key and scale
 

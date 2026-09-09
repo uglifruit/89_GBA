@@ -183,7 +183,7 @@ static int page_rows(int page)
     case PAGE_ORN:   return 5;                    // SLOT, LENGTH, RATE, MODE, STEPS
     case PAGE_DRUM:  return 2 + DRUM_SRC_COUNT;   // MODE, THRESHOLD, then one row per input
     case PAGE_MEM:   return 1;                    // the grid is the whole page
-    case PAGE_CAL:   return 7;
+    case PAGE_CAL:   return 8;
     default:         return 5;                    // SET
     }
 }
@@ -237,6 +237,7 @@ static const char *field_label(int page, int row)
         case 3: return "MASTER L";
         case 4: return "MASTER R";
         case 5: return "PSG LEVEL";
+        case 6: return "CV 2 IN";
         default: return "LINK";
         }
     case PAGE_MEM:
@@ -390,6 +391,11 @@ static void field_value(int page, int row, char *buf)
         case 3: dec32(buf, p->masterL, 3); return;
         case 4: dec32(buf, p->masterR, 3); return;
         case 5: scopy(buf, 0, RATIO_NAME[p->ratio & 3]); return;
+        // THE LIVE COUNT, WHICH IS WHAT MAKES THIS PAGE A CALIBRATION PAGE RATHER THAN A GUESS.
+        // It is exactly the `raw` that the pitch maths works on, so two readings a known interval
+        // apart give CV SCALE directly: scale = 16 * (high - low) / semitones between them.
+        // Without it the only way to trim 1V/oct was by ear, one press at a time.
+        case 6: sdec32(buf, (int32_t)g_in[SRC_CV2] - 2048, 6); return;
         default: scopy(buf, 0, link_irq_alive() ? "IRQ" : "POLLED"); return;
         }
     case PAGE_MEM:

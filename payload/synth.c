@@ -267,10 +267,18 @@ void synth_default_patch(void)
     p->drumMode   = 0;
     p->drumThresh = 6;
 
-    // Workshop CV inputs span about +-6 V over 4096 counts: 341 counts/V, 28.44 per semitone,
-    // and Q4 of 28.44 is 455. There is no factory calibration for the CV INPUTS, so this is a
-    // starting estimate to be trimmed on the CAL page.
-    p->cvScale  = 455;
+    // COUNTS PER SEMITONE, Q4. MEASURED, NOT CALCULATED.
+    //
+    // This was 455, from taking the CV inputs to span +-6 V over 4096 counts: 341 counts/V,
+    // 28.44 per semitone, Q4 of that being 455. On hardware an octave then wanted about 2.2 V
+    // instead of 1 V, so the assumed span is wrong - the ADC evidently keeps a good deal of
+    // over-range headroom either side of the nominal input range. 455 / 2.2 is 207.
+    //
+    // It is still only as good as one bench reading, which is why CV SCALE is trimmable and why
+    // the CAL page now shows the live input count: two readings a known interval apart give the
+    // exact figure as 16 * (high - low) / semitones. There is no factory calibration for the CV
+    // INPUTS, so this can never be more than a good starting point.
+    p->cvScale  = 207;
     p->cvOffset = 0;
 
     // ---- the modulation matrix -------------------------------------------------------------
