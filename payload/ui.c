@@ -1066,10 +1066,13 @@ static void edit_extras(void)
         at = scopy(buf, at, r);
         scopy(buf, at, (g_hostCaps & GBA_CAP_CVOUT_CAL) ? "  CAL" : "  UNCAL");
 
+        // y=114, not 104: the list is eight rows now (CV 2 IN was added for the 1V/oct trim)
+        // and ends at y=110, so the old position sat on top of the LINK row - and the clear
+        // rect took a bite out of it every time the reading changed.
         if (!streq(buf, lastLine)) {
             scopy(lastLine, 0, buf);
-            srect(10, 104, SCREEN_W - 20, 10, COL_BG);
-            text(14, 104, buf, COL_MID, 1);
+            srect(10, 114, SCREEN_W - 20, 10, COL_BG);
+            text(14, 114, buf, COL_MID, 1);
         }
 
         break;

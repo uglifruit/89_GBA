@@ -4,7 +4,7 @@ Description: Boots a cartridge-less Game Boy Advance over the pulse jacks via BI
 Language: C++ (RP2040 Pico SDK) + C (GBA payload)
 Creator: Andy Jenkinson (uglifruit)
 Version: 1.0.0
-Status: Stable
+Status: Released
 License: MIT
 Repository: https://github.com/TomWhitwell/Workshop_Computer/tree/main/releases/89_GBA
 
