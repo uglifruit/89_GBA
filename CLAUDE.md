@@ -15,12 +15,21 @@ would take a full re-investigation to rediscover.
 - **THE REPO IS `89_GBA` AND THE RELEASE FOLDER IS `108_GBA`. THAT MISMATCH IS DELIBERATE — do
   not "fix" it.** The repo was named when 89 was free; by the time it was ready to PR, 89 was
   taken, so the release goes to `TomWhitwell/Workshop_Computer` under `releases/108_GBA/`. The
-  repo keeps its original name because that is what it has always been called. Only the
-  `Repository:` URL in `info.yaml` tracks the release number.
-- Nothing in the firmware encodes the card number, so a renumber is those two places and no
-  more. `CARD_NAME` in `CMakeLists.txt` is the build target (`gba_link`), not the card ID.
+  repo keeps its original name because that is what it has always been called.
+- **The card number is not recorded anywhere in this repo** — `info.yaml`'s `repository:` points
+  at the upstream repo, and nothing in the firmware encodes it (`CARD_NAME` in `CMakeLists.txt`
+  is the build target, `gba_link`, not the card ID). The number lives only in the destination
+  folder name, so a renumber is a `git mv` in the monorepo and nothing here.
 - Keep it self-contained (vendored `ComputerCard.h`, no external path deps) so copy-in is
   clean.
+- **THIS FILE DOES NOT GO INTO THE RELEASE.** Copy everything else; leave `CLAUDE.md` behind.
+  It is working notes addressed to an assistant, not user documentation, and no other release
+  carries one.
+- **The built firmware DOES go in, as `UF2/gba_link.uf2`.** The program listing at
+  computer.musicthing.co.uk links that path directly and publishes its SHA256, so the release
+  is not complete without it, and **it has to be rebuilt and re-copied whenever the payload or
+  the firmware changes** — a stale UF2 there is worse than none, because it looks current.
+  `info.yaml`'s `uf2:` block names the path and must agree with `Version:`.
 - `ComputerCard.h` is the **vendored Workshop HAL** (Chris Johnson's library, base v0.3.0),
   copied per-applet. **This applet uses Andy's improved copy**, not stock — see below.
 
@@ -356,8 +365,14 @@ cd payload && ./build.sh
 
 - Match `96_cathode`'s CMake link set and `set_sys_clock_khz(144000, true)` (clean multiple
   of 48 MHz → tidy PIO clkdivs).
-- `info.yaml` follows Tom's format (no quotes, `draft: false`); it documents the jack/LED
-  panel labels for the release.
+- **`info.yaml`'s schema is set by what the program listing at computer.musicthing.co.uk parses,
+  and it is NOT obvious — check a live release before changing it.** Verified against
+  `104_barbers_pole` and `96_cathode`, key order as written:
+  `draft`, `Name` (no card number — the site prepends that from the folder), `short-description`
+  (**not** `Description`), `Language`, `Creator`, `Version`, `Status`, `License`, `repository`
+  (lowercase, and it points at the UPSTREAM repo, not the release folder), `Editor`,
+  `date-created`, `date-updated`, then the blocks `contact`, `uf2`, `tags`, `summary`
+  (**not** `manual`), `panel`, `controls`.
 - **Measured link numbers** (`diagnostics/POSTMORTEM.md` has the full record): multiboot
   100 kHz, sustained 2000 words/s clean, ~64 kbit/s, round trip ≤0.5 ms, 32 KB payload uploads
   in ~5 s. SCK above 100 kHz has never been *fairly* tested — the readings that suggested a

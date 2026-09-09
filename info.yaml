@@ -1,12 +1,23 @@
 draft: false
 Name: GBA PSG Voice
-Description: Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then plays it as a chiptune synth voice with the whole sound editor on the GBA's own screen
+short-description: "Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then plays it as a chiptune synth voice with the whole sound editor on the GBA's own screen"
 Language: C++ (RP2040 Pico SDK) + C (GBA payload)
 Creator: Andy Jenkinson (uglifruit)
 Version: 1.0.1
 Status: Released
 License: MIT
-Repository: https://github.com/TomWhitwell/Workshop_Computer/tree/main/releases/108_GBA
+repository: https://github.com/uglifruit/89_GBA
+Editor: none
+date-created: 2026-07-04
+date-updated: 2026-09-10
+
+contact:
+  social:
+    github: https://github.com/uglifruit
+
+uf2:
+  - path: UF2/gba_link.uf2
+    name: GBA PSG Voice 1.0.1
 
 tags:
   - gba
@@ -19,7 +30,7 @@ tags:
   - screen
   - quantiser
 
-manual: |
+summary: |
   GBA PSG Voice turns the Workshop Computer into a Game Boy Advance link-cable master and the
   GBA into a synth voice you play from the rack. No cartridge, no flashcart, no modification to
   the console: the program is uploaded from the module every time you switch on, in about six
