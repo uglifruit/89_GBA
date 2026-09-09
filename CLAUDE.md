@@ -227,10 +227,16 @@ Per-channel mixer level is fine and always was: `lv == 0` forces the output to z
 
 ## Patch storage
 
-**`PATCH_VERSION` is checked, not assumed, and it must be bumped whenever `Patch`'s LAYOUT
-changes** — not just when a field's meaning changes. Adding `SRC_SW` grew `mod[]` by one
-`ModSlot`, which shifted every field after it, so a v1 slot read as v2 is not merely wrong but
-*silently* wrong. `sizeof(Patch)` is 238 of the 256-byte slot; `patch_fits_a_slot` in `synth.c`
+**`PATCH_VERSION` is checked, not assumed, and it must be bumped whenever a stored field changes
+its LAYOUT *or* its MEANING.** Either way an old slot read as a current `Patch` is not merely
+wrong but *silently* wrong.
+
+**The two kinds are not handled the same way.** A layout change cannot be recovered from the
+bytes alone, so `synth_patch_valid()` rejects it. A change of meaning at the same layout can be
+brought forward exactly, and `synth_patch_migrate()` does that in place — call it after the byte
+copy and **before** `synth_patch_applied()`, which derives cached values from the fields. v2 grew
+`mod[]` (rejected); v3 moved `cvScale` from Q4 to Q8 (migrated by ×16). Prefer migrating: a
+version bump that throws away the user's saved patches should be a last resort, not the default. `sizeof(Patch)` is 238 of the 256-byte slot; `patch_fits_a_slot` in `synth.c`
 is the backstop, and `arm-none-eabi-nm --print-size` on an object declaring a `Patch` is how to
 read the real number.
 

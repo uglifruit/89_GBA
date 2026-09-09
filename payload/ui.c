@@ -469,7 +469,15 @@ static void field_adjust(int page, int row, int delta)
         }
     case PAGE_CAL:
         switch (row) {
-        case 0: p->cvScale  = (int16_t)clampi(p->cvScale + delta, 64, 4000); return;
+        case 0: {
+            // COARSE IS x8 HERE AND NOWHERE ELSE. cvScale is Q8, so A+Up/Down's step of 1 is
+            // 1/256 of a count per semitone - which is the whole point of the precision, but it
+            // would also make a first calibration hundreds of presses. A+Left/Right therefore
+            // moves by 64, a little under one step of the old Q4 unit.
+            int d = (delta == 8 || delta == -8) ? delta * 8 : delta;
+            p->cvScale = (int16_t)clampi(p->cvScale + d, 1024, 32767);
+            return;
+        }
         case 1: p->cvOffset = (int16_t)clampi(p->cvOffset + delta, -2048, 2047); return;
         case 2: p->baseNote = (uint8_t)clampi(p->baseNote + delta, 0, 120); return;
         case 3: p->masterL  = (uint8_t)clampi(p->masterL + delta, 0, 7); return;
@@ -1286,6 +1294,9 @@ void ui_frame(void)
             uint8_t *dst = (uint8_t *)&g_patch;
             const uint8_t *src = (const uint8_t *)in;
             for (int i = 0; i < synth_patch_bytes(); i++) dst[i] = src[i];
+            // Migrate BEFORE applying: synth_patch_applied() derives the CV reciprocal from
+            // cvScale, so migrating afterwards would leave it computed from the old units.
+            synth_patch_migrate(&g_patch);
             synth_patch_applied();
             psg_wave_load(psg_wave_preset[g_patch.waveSel % PSG_WAVE_PRESETS]);
             g_repaint = 1;

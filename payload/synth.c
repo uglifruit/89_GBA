@@ -175,10 +175,13 @@ static void refresh_cv_recip(void)
     if (g_patch.cvScale == g_cvRecipFor) return;
     g_cvRecipFor = g_patch.cvScale;
     int32_t s = g_patch.cvScale;
-    // Floor of 64 is an OVERFLOW guard: recip is (4096 << 12) / cvScale and the pitch maths
-    // multiplies it by up to 4095 counts. At 64 that peaks near 1.07e9, inside int32.
-    if (s < 64) s = 64;
-    g_cvRecip = (int32_t)udiv32(4096u << 12, (uint32_t)s);
+    // cvScale is counts per semitone in 1/256ths (Q8), so semiQ8 = raw * 256 * 256 / cvScale,
+    // and the reciprocal that ">> 12" then divides by is (65536 << 12) / cvScale = 2^28 / s.
+    //
+    // Floor of 1024 is an OVERFLOW guard: the pitch maths multiplies the reciprocal by up to
+    // 4095 counts, and at 1024 that peaks near 1.07e9, inside int32.
+    if (s < 1024) s = 1024;
+    g_cvRecip = (int32_t)udiv32(65536u << 12, (uint32_t)s);
 }
 
 void synth_patch_applied(void) { g_cvRecipFor = 0; refresh_cv_recip(); }
@@ -190,9 +193,28 @@ static int32_t clampi(int32_t v, int32_t lo, int32_t hi)
 
 int synth_patch_bytes(void) { return (int)sizeof(Patch); }
 
+// ACCEPT OLDER VERSIONS THAT CAN BE BROUGHT FORWARD, not just the current one. See
+// synth_patch_migrate for what "can be" means: same layout, different meaning.
 int synth_patch_valid(const Patch *p)
 {
-    return p->magic == PATCH_MAGIC && p->version == PATCH_VERSION;
+    return p->magic == PATCH_MAGIC && p->version >= 2 && p->version <= PATCH_VERSION;
+}
+
+// Bring a loaded patch up to the current version IN PLACE. This only ever handles changes that
+// leave the STRUCT LAYOUT alone and alter what a field means - a layout change cannot be
+// migrated from the bytes alone, and synth_patch_valid rejects those instead.
+//
+// v2 -> v3: cvScale went from counts per semitone in 1/16ths to 1/256ths, for the resolution.
+void synth_patch_migrate(Patch *p)
+{
+    if (p->version == 2) {
+        // Clamp on the way up: the v2 range topped out at 4000, and 4000 * 16 is 64000, which
+        // wraps negative in an int16_t. refresh_cv_recip() would then floor it and the patch
+        // would load quietly mistuned instead of loudly broken.
+        int32_t q8 = (int32_t)p->cvScale * 16;
+        p->cvScale = (int16_t)clampi(q8, 1024, 32767);
+    }
+    p->version = PATCH_VERSION;
 }
 
 // ---- the factory patch ----------------------------------------------------------------------
@@ -267,18 +289,23 @@ void synth_default_patch(void)
     p->drumMode   = 0;
     p->drumThresh = 6;
 
-    // COUNTS PER SEMITONE, Q4. MEASURED, NOT CALCULATED.
+    // COUNTS PER SEMITONE, Q8. MEASURED, NOT CALCULATED.
     //
-    // This was 455, from taking the CV inputs to span +-6 V over 4096 counts: 341 counts/V,
-    // 28.44 per semitone, Q4 of that being 455. On hardware an octave then wanted about 2.2 V
-    // instead of 1 V, so the assumed span is wrong - the ADC evidently keeps a good deal of
-    // over-range headroom either side of the nominal input range. 455 / 2.2 is 207.
+    // 3312 is 207 in the old Q4 unit, which is the bench trim: an octave measured about 2.2 V
+    // under the original 455, and 455 / 2.2 is 207. That 455 came from taking the CV inputs to
+    // span +-6 V over the full 4096 counts - 341 counts/V, 28.44 per semitone - and the hardware
+    // says otherwise, so the ADC evidently keeps a good deal of over-range headroom either side
+    // of the nominal input range.
+    //
+    // Q8 RATHER THAN Q4 BECAUSE PITCH ERROR ACCUMULATES WITH DISTANCE FROM THE CALIBRATION
+    // POINT. One Q4 step is 0.48%, which is 17 cents three octaves up - so 206 and 207 straddled
+    // correct with nothing between them. A Q8 step is 1.1 cents at the same distance.
     //
     // It is still only as good as one bench reading, which is why CV SCALE is trimmable and why
-    // the CAL page now shows the live input count: two readings a known interval apart give the
-    // exact figure as 16 * (high - low) / semitones. There is no factory calibration for the CV
+    // the CAL page shows the live input count: two readings a known interval apart give the
+    // exact figure as 256 * (high - low) / semitones. There is no factory calibration for the CV
     // INPUTS, so this can never be more than a good starting point.
-    p->cvScale  = 207;
+    p->cvScale  = 3312;
     p->cvOffset = 0;
 
     // ---- the modulation matrix -------------------------------------------------------------

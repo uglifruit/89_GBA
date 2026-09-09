@@ -165,10 +165,15 @@ extern const char *drum_name[DRUM_PRESETS];
 // Stored verbatim in one 256-byte flash slot on the Workshop. The magic and version come first
 // so an erased slot (all 0xFF) can never be mistaken for a patch.
 #define PATCH_MAGIC   0x4742u      // 'GB'
-// Version 2 added SRC_SW, which grew mod[] and shifted every field after it. A v1 slot read as a
-// v2 Patch is not merely wrong, it is silently wrong - so the version is checked, not assumed,
-// and an older slot is rejected by synth_patch_valid() rather than loaded as garbage.
-#define PATCH_VERSION 2
+// BUMP THIS WHENEVER A STORED FIELD CHANGES ITS LAYOUT *OR* ITS MEANING. Either way an old slot
+// read as a current Patch is not merely wrong, it is silently wrong, so the version is checked
+// rather than assumed.
+//
+//   v2  added SRC_SW, which grew mod[] and shifted every field after it. A LAYOUT change, and
+//       those cannot be recovered from the bytes alone - synth_patch_valid() rejects them.
+//   v3  cvScale went from counts per semitone in 1/16ths to 1/256ths. Same layout, different
+//       meaning, so synth_patch_migrate() brings it forward instead of throwing it away.
+#define PATCH_VERSION 3
 
 typedef struct {
     uint16_t magic;
@@ -183,6 +188,8 @@ typedef struct {
     uint8_t  sweepTime, sweepDir, sweepShift;
     int8_t   octave;
     uint8_t  masterL, masterR, ratio, baseNote;
+    // cvScale is COUNTS PER SEMITONE IN 1/256ths (Q8) - see synth_default_patch() for why that
+    // precision, and refresh_cv_recip() for the reciprocal it feeds. cvOffset is plain counts.
     int16_t  cvScale, cvOffset;
 
     ModSlot  mod[SRC_COUNT];
@@ -223,6 +230,7 @@ void synth_update(void);
 void synth_default_patch(void);       // reset to the factory patch
 int  synth_patch_bytes(void);         // sizeof(Patch), for the transfer
 int  synth_patch_valid(const Patch *p);
+void synth_patch_migrate(Patch *p);   // bring an older-but-compatible patch up to date, in place
 void synth_patch_applied(void);       // re-derive anything cached from the patch
 
 // Button state, sampled at the control rate; the UI drains the latches at frame rate.

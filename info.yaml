@@ -3,7 +3,7 @@ Name: GBA PSG Voice
 Description: Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then plays it as a chiptune synth voice with the whole sound editor on the GBA's own screen
 Language: C++ (RP2040 Pico SDK) + C (GBA payload)
 Creator: Andy Jenkinson (uglifruit)
-Version: 1.0.0
+Version: 1.0.1
 Status: Released
 License: MIT
 Repository: https://github.com/TomWhitwell/Workshop_Computer/tree/main/releases/89_GBA

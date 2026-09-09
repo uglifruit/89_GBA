@@ -397,7 +397,7 @@ the module's EEPROM, so the quantised pitch coming out is in tune for free — b
 calibration of any kind for the CV inputs.** 1V/oct tracking on CV In 2 rests on a single
 constant, `CV SCALE`, and it varies with the module.
 
-`CV SCALE` is **counts per semitone in 1/16ths**. `CV 2 IN` shows the **live raw count** — the
+`CV SCALE` is **counts per semitone in 1/256ths**. `CV 2 IN` shows the **live raw count** — the
 exact number the pitch maths works on — and it is what makes an accurate trim possible instead
 of a hunt by ear.
 
@@ -406,17 +406,25 @@ of a hunt by ear.
 1. Patch your pitch source to **CV In 2** and open the CAL page.
 2. Play a low note and read `CV 2 IN`. Call it **L**.
 3. Play a note **exactly two octaves higher** and read it again. Call it **H**.
-4. `CV SCALE` = **16 × (H − L) ÷ 24**, since two octaves is 24 semitones. Two octaves rather
+4. `CV SCALE` = **256 × (H − L) ÷ 24**, since two octaves is 24 semitones. Two octaves rather
    than one because the arithmetic error halves.
-5. Dial that in on `CV SCALE` (A + Up/Down steps by 1, A + Left/Right by 8) and re-check by ear.
+5. Dial that in on `CV SCALE` — **A + Left/Right steps by 64, A + Up/Down by 1** — and re-check
+   by ear.
 
 `CV OFFSET` then moves the whole range without changing its span, and `BASE NOTE` sets what
 0 V means (C2 by default).
 
-> **The shipped default of 207 is a bench measurement from one module, not a specification.**
+> **The shipped default of 3312 is a bench measurement from one module, not a specification.**
 > It replaced a value calculated on the assumption that the inputs span ±6 V over the full 4096
 > counts — which turned out to want about 2.2 V per octave in practice, because the ADC keeps
 > substantial over-range headroom either side of the nominal input range. Expect to trim it.
+
+**Why the constant is stored so finely.** Pitch error accumulates with distance from the
+calibration point, so a coarse constant is not a small error at the far end of the keyboard. In
+1/16ths one step was 0.48 %, which is **17 cents three octaves up** — correct fell between two
+adjacent values with nothing in between. In 1/256ths the same step is 1.1 cents. None of this
+involves floating point: the maths was always integer, and the resolution is simply how many
+bits the stored constant carries.
 
 **Nothing on the Workshop side needs changing to fix tracking.** That end sends raw ADC counts
 and nothing else, by design; every part of the pitch calculation lives on the GBA, which is why
