@@ -15,7 +15,12 @@
 #define SRC_MAIN  4
 #define SRC_X     5
 #define SRC_Y     6
-#define SRC_COUNT 7
+// The Workshop's three-way switch. DOWN is already a trigger source (the SW column of the TRIG
+// grid), so this reads as "how far UP the switch is" rather than as a bipolar three-way: UP is
+// full, MIDDLE and DOWN are zero. Giving DOWN a modulation value too would mean every trigger
+// also yanked whatever the switch was mapped to.
+#define SRC_SW    7
+#define SRC_COUNT 8
 
 extern const char *src_name[SRC_COUNT];
 
@@ -160,7 +165,10 @@ extern const char *drum_name[DRUM_PRESETS];
 // Stored verbatim in one 256-byte flash slot on the Workshop. The magic and version come first
 // so an erased slot (all 0xFF) can never be mistaken for a patch.
 #define PATCH_MAGIC   0x4742u      // 'GB'
-#define PATCH_VERSION 1
+// Version 2 added SRC_SW, which grew mod[] and shifted every field after it. A v1 slot read as a
+// v2 Patch is not merely wrong, it is silently wrong - so the version is checked, not assumed,
+// and an older slot is rejected by synth_patch_valid() rather than loaded as garbage.
+#define PATCH_VERSION 2
 
 typedef struct {
     uint16_t magic;

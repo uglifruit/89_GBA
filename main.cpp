@@ -19,7 +19,8 @@
 //   CV In 1      timbre (pulse duty)   Audio In 1   channel-2 detune
 //   Audio In 2   noise level           (all four are re-assignable on the GBA's MAP page)
 //   CV Out 2     quantised pitch, calibrated 1V/oct
-//   CV Out 1     gate mirror, 5 V
+//   CV Out 1     gate out, 5 V
+//   Audio Out 1  GBA A button gate       Audio Out 2  GBA B button gate
 //
 // Architecture: ComputerCard's 48 kHz audio/CV loop runs on core 0 (ProcessSample below). The
 // entire GBA link engine runs on core 1 (gba_link_core1) and communicates only through the
@@ -101,10 +102,16 @@ public:
         CVOut2MIDINote(gGba.note);
         CVOut1Millivolts(gGba.noteVel ? 5000 : 0);
 
-        // Audio outs mirror the gate as a trigger pair — handy for chaining, and it makes the
-        // module visibly alive even with nothing patched to CV.
-        AudioOut1(gGba.noteVel ? 2000 : 0);
-        AudioOut2(gGba.gate    ? 2000 : 0);
+        // Audio outs carry the GBA's A and B buttons as gates, so the performance gestures are
+        // patchable by the rest of the rack — mult A into another module's trigger and it follows
+        // your fingers. These are the PHYSICAL buttons, so they track whatever the BTN page has
+        // assigned them to (A is TRIGGER and B is HOLD by default).
+        //
+        // They previously mirrored the gate, which said nothing the rack did not already know:
+        // Audio Out 1 duplicated CV Out 1, and Audio Out 2 echoed whatever was patched into
+        // Pulse In 2 in the first place.
+        AudioOut1((gGba.buttons & GBA_A) ? 2000 : 0);
+        AudioOut2((gGba.buttons & GBA_B) ? 2000 : 0);
 
         // ---- status on the LEDs ----
         // While the link is up these are instrument state. While it is NOT, they become a

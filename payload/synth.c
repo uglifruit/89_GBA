@@ -35,7 +35,8 @@ const char *dest_name[DEST_COUNT] = {
     "---", "PITCH", "LEVEL", "DUTY", "DETUNE", "GLIDE", "DECAY",
     "SWEEP", "N PITCH", "ORNMNT", "ORNRATE", "SCALE", "KEY", "ATTACK", "RELEASE"
 };
-const char *src_name[SRC_COUNT] = { "CV 1", "CV 2", "AUD 1", "AUD 2", "MAIN", "KNOB X", "KNOB Y" };
+const char *src_name[SRC_COUNT] = { "CV 1", "CV 2", "AUD 1", "AUD 2", "MAIN", "KNOB X", "KNOB Y",
+                                    "SWITCH" };
 const char *trig_name[TRIG_COUNT] = { "PU2", "SW", "BTN" };
 const char *pan_name[4] = { "OFF", "L", "R", "BOTH" };
 const char *key_name[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
@@ -547,9 +548,11 @@ static void synth_tick(void)
         uint8_t mask  = p->mod[s].chMask;
 
         // The four jacks are bipolar around 0 V; the three knobs are unipolar and are centred
-        // here so one depth control means the same thing for both.
+        // here so one depth control means the same thing for both. The switch is neither: see
+        // SRC_SW in synth.h for why UP is the only position that carries a value.
         int32_t raw = (s < 4) ? ((int32_t)g_in[s] - 2048)
-                              : ((int32_t)g_knob[s - 4] - 2048);
+                    : (s < 7) ? ((int32_t)g_knob[s - 4] - 2048)
+                              : ((g_switch == 2) ? 2047 : 0);
 
         if (dest == DEST_PITCH) {
             int32_t semiQ8 = ((raw - p->cvOffset) * g_cvRecip) >> 12;

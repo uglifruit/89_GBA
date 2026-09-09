@@ -98,9 +98,10 @@ patch. The MAP page is where you give them a job.
 | **Audio In 2** | channel-4 level | yes, MAP page |
 | **Main / X / Y knobs** | unassigned | yes, MAP page |
 | **Switch (down)** | trigger | TRIG page |
+| **Switch (up)** | unassigned modulation | yes, MAP page |
 | **CV Out 2** | quantised pitch, calibrated 1V/oct | — |
-| **CV Out 1** | gate mirror, 5 V | — |
-| **Audio Out 1 / 2** | note / gate triggers | — |
+| **CV Out 1** | gate out, 5 V | — |
+| **Audio Out 1 / 2** | GBA **A** and **B** buttons as gates | follows the BTN page |
 
 **LEDs while the link is up:** 0 link, 1 gate in, 2 note sounding, 3 editing, 4+5 edit page as a
 binary pair.
@@ -127,19 +128,22 @@ holds, so latch a drone in PLAY and then go and edit it.
 | **SELECT** + Left/Right | change page — hold it down to run through them quickly |
 | **START** | back to the performance screen |
 
+**START opens the editor on MEM.** Recalling a patch is the one editor action that happens
+mid-performance, so it is one gesture away rather than eight presses of SELECT+Right.
+
 ### The eleven pages
 
 | Page | What it holds |
 |------|---------------|
+| **MEM** | sixteen patch slots on the card. A+Up saves, A+Down loads. **Where START lands** |
 | **CHAN** | all four channels side by side: output, semitone, ornament, timbre, detune, noise, sweep |
 | **TRIG** | pin grid — which sources trigger which channel (PU2, the Workshop switch, a GBA button) |
 | **ENV** | per-channel ADSR with a drawn envelope, a live level tick, and per-voice portamento |
 | **MIX** | four faders: level and OFF/L/R/BOTH, with the live envelope drawn inside the set level |
 | **BTN** | what each of the eight GBA buttons does |
-| **MAP** | modulation matrix: seven sources × destination × amount × per-voice tickboxes |
+| **MAP** | modulation matrix: eight sources × destination × amount × per-voice tickboxes |
 | **ORN** | ornaments — sixteen-step semitone sequences, edited graphically, with a loop/end marker |
 | **DRUM** | a drum sound per input; any input going high fires it. Borrows channels 3 and 4 |
-| **MEM** | sixteen patch slots on the card. A+Up saves, A+Down loads |
 | **CAL** | **CV input scale and offset trim**, base note, master volume, PSG level, link mode |
 | **SET** | master tuning in cents, key, scale (19 of them), octave, user-scale editor |
 

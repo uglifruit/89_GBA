@@ -39,7 +39,7 @@
 #define KEY_UP     (1u << 6)
 #define KEY_DOWN   (1u << 7)
 
-uint8_t g_page = PAGE_CHAN;
+uint8_t g_page = PAGE_MEM;
 
 static uint8_t g_row     = 0;
 static uint8_t g_scroll  = 0;
@@ -58,7 +58,7 @@ static int     g_tabPage  = -1;
 // Eleven tabs across 240 px. "CHAN" rather than "VOICE" because the page is per-channel and the
 // shorter word is what makes the row fit without abbreviating the rest into noise.
 static const char *page_tab[PAGE_COUNT] = {
-    "CHAN", "TRIG", "ENV", "MIX", "BTN", "MAP", "ORN", "DRUM", "MEM", "CAL", "SET"
+    "MEM", "CHAN", "TRIG", "ENV", "MIX", "BTN", "MAP", "ORN", "DRUM", "CAL", "SET"
 };
 
 static const char *NOTE_NAME[12] = {
@@ -1072,7 +1072,7 @@ static void edit_extras(void)
 // ---- dispatch -----------------------------------------------------------------------------------------
 void ui_init(void)
 {
-    g_page = PAGE_CHAN;
+    g_page = PAGE_MEM;
     g_row = 0;
     g_scroll = 0;
     g_repaint = 1;
@@ -1114,7 +1114,8 @@ void ui_frame(void)
     if (edges & KEY_START) {
         g_editMode = (uint8_t)!g_editMode;
         // Entering the editor always lands on the first page: START is a way in, not a bookmark.
-        if (g_editMode) { g_page = PAGE_CHAN; g_row = 0; g_scroll = 0; g_trigCol = 0; g_mapCol = 0; }
+        // That page is now MEM, so START is one gesture from recalling a patch.
+        if (g_editMode) { g_page = PAGE_MEM; g_row = 0; g_scroll = 0; g_trigCol = 0; g_mapCol = 0; }
         g_repaint = 1;
     }
 

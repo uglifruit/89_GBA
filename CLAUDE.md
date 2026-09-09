@@ -78,7 +78,9 @@ streams them down raw; the GBA owns pitch tracking, the modulation matrix, the e
 sound and the whole UI. It sends back only what the rack needs: buttons, note, gate, status.
 
 This is why the on-screen editor costs no protocol. Re-mapping Audio In 1 from detune to
-vibrato is a change to a table in GBA RAM. Had the mapping lived on the Workshop side, every
+vibrato is a change to a table in GBA RAM — and why giving the switch's UP position a meaning
+cost one line in `synth.c` rather than an opcode: its position was already arriving every poll,
+it just had nowhere to go. Had the mapping lived on the Workshop side, every
 edit page would have needed its own downstream opcode. **Do not move musical decisions to the
 RP2040** — it is not where they belong and it makes the protocol grow without limit.
 
@@ -225,6 +227,13 @@ Per-channel mixer level is fine and always was: `lv == 0` forces the output to z
 
 ## Patch storage
 
+**`PATCH_VERSION` is checked, not assumed, and it must be bumped whenever `Patch`'s LAYOUT
+changes** — not just when a field's meaning changes. Adding `SRC_SW` grew `mod[]` by one
+`ModSlot`, which shifted every field after it, so a v1 slot read as v2 is not merely wrong but
+*silently* wrong. `sizeof(Patch)` is 238 of the 256-byte slot; `patch_fits_a_slot` in `synth.c`
+is the backstop, and `arm-none-eabi-nm --print-size` on an object declaring a `Patch` is how to
+read the real number.
+
 Sixteen 256-byte slots in the Workshop's last flash sector, one byte per link word in either
 direction, each byte carrying its own index so a lost word leaves a hole the receiver can see.
 
@@ -242,6 +251,13 @@ direction, each byte carrying its own index so a lost word leaves a hole the rec
   prints "BAD DATA - NOT LOADED".
 - A save is self-healing without a retransmit protocol: the GBA repeats the whole block until the
   host acks, and the host commits only a block whose seen-bitmap is complete.
+
+## Page order is an index, not a list
+
+`PAGE_*` in `ui.h` ARE the indices into `page_tab[]` in `ui.c`, and the status word sends the
+page number upstream to the LEDs. Renumbering the defines without reordering that array gives a
+tab bar that lies rather than a compile error. `PAGE_MEM` is deliberately 0: recalling a patch
+is the one editor action that happens mid-performance, so START lands on it.
 
 ## Payload UI rules (learned the hard way, all of them)
 

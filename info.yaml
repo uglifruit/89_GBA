@@ -3,7 +3,7 @@ Name: GBA PSG Voice
 Description: Boots a cartridge-less Game Boy Advance over the pulse jacks via BIOS Multiboot, then plays it as a chiptune synth voice with the whole sound editor on the GBA's own screen
 Language: C++ (RP2040 Pico SDK) + C (GBA payload)
 Creator: Andy Jenkinson (uglifruit)
-Version: 0.3.0
+Version: 0.4.0
 Status: Work in progress
 License: MIT
 Repository: https://github.com/TomWhitwell/Workshop_Computer/tree/main/releases/89_GBA
@@ -46,19 +46,21 @@ manual: |
 
   Defaults: CV In 2 is 1V/oct pitch, Pulse In 2 and the momentary switch are triggers, CV In 1
   sweeps pulse duty, Audio In 1 detunes the second square, Audio In 2 drives the noise channel.
-  All four jacks and the three knobs are re-assignable on the GBA's MAP page, each with its own
-  set of per-voice tickboxes.
+  All four jacks, the three knobs and the switch are re-assignable on the GBA's MAP page, each
+  with its own set of per-voice tickboxes. Audio Out 1 and 2 send the GBA's A and B buttons back
+  out as gates, so a performance gesture can drive the rest of the rack.
 
-  On the GBA, START opens the editor and SELECT + Left/Right walks its eleven pages: CHAN, TRIG,
-  ENV, MIX, BTN, MAP, ORN, DRUM, MEM, CAL, SET. Editing is A + D-pad throughout; inside a menu
-  no button carries its performance meaning.
+  On the GBA, START opens the editor on MEM - patch recall is the one editor action that happens
+  mid-performance, so it is one gesture away - and SELECT + Left/Right walks the eleven pages:
+  MEM, CHAN, TRIG, ENV, MIX, BTN, MAP, ORN, DRUM, CAL, SET. Editing is A + D-pad throughout;
+  inside a menu no button carries its performance meaning.
 
   The CAL page trims the CV input scale and offset. The module's CV OUTPUTS are factory
   calibrated from its EEPROM, so the quantised pitch out is in tune for free, but the CV INPUTS
   are not calibrated at all - so 1V/oct tracking on CV In 2 has to be trimmed once, with the
   live note readout on that page to trim against.
 
-  Sixteen patches are stored on the card itself (MEM page: A+UP saves, B+DOWN loads). Saving
+  Sixteen patches are stored on the card itself (MEM page: A+UP saves, A+DOWN loads). Saving
   erases a flash sector, which briefly stops the audio - expect a click.
 
 panel:
@@ -104,17 +106,20 @@ panel:
       name: Gate out
       description: 5V while a note is sounding
     - id: AudioOut1
-      name: Note trigger
-      description: High while the GBA envelope is active
+      name: A button gate
+      description: High while the GBA's A button is held - the performance gesture as a patchable voltage
     - id: AudioOut2
-      name: Gate mirror
-      description: Follows Pulse In 2
+      name: B button gate
+      description: High while the GBA's B button is held
 
 controls:
   switch:
     - id: Down
       name: Trigger
       description: Momentary down fires a note; a column of the GBA's TRIG grid
+    - id: Up
+      name: Modulation
+      description: An eighth source on the GBA's MAP page - assign it to anything. Up is full, middle and down are zero
   leds:
     - id: LED0
       name: Link (solid booted, blinking connecting)
