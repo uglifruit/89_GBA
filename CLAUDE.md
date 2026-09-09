@@ -10,13 +10,17 @@ would take a full re-investigation to rediscover.
 
 ## What this is
 
-- **The applet is called GBA**, not "89_GBA". The number is the card ID and belongs to the
-  release PATH, never to the name: it appears in `releases/89_GBA/` and nowhere else. Titles,
-  headings and `info.yaml` all say GBA.
-- **Standalone repo** (`uglifruit/89_GBA`), but the applet is a **Workshop Computer release**
-  and is intended to be PR'd into `TomWhitwell/Workshop_Computer` under `releases/89_GBA/`
-  later. Keep it self-contained (vendored `ComputerCard.h`, no external path deps) so that
-  copy-in is clean.
+- **The applet is called GBA.** A card number is the release PATH's business, never the name's:
+  titles, headings and `info.yaml` all say GBA, and no number appears in any of them.
+- **THE REPO IS `89_GBA` AND THE RELEASE FOLDER IS `108_GBA`. THAT MISMATCH IS DELIBERATE — do
+  not "fix" it.** The repo was named when 89 was free; by the time it was ready to PR, 89 was
+  taken, so the release goes to `TomWhitwell/Workshop_Computer` under `releases/108_GBA/`. The
+  repo keeps its original name because that is what it has always been called. Only the
+  `Repository:` URL in `info.yaml` tracks the release number.
+- Nothing in the firmware encodes the card number, so a renumber is those two places and no
+  more. `CARD_NAME` in `CMakeLists.txt` is the build target (`gba_link`), not the card ID.
+- Keep it self-contained (vendored `ComputerCard.h`, no external path deps) so copy-in is
+  clean.
 - `ComputerCard.h` is the **vendored Workshop HAL** (Chris Johnson's library, base v0.3.0),
   copied per-applet. **This applet uses Andy's improved copy**, not stock — see below.
 
