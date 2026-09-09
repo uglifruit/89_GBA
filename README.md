@@ -531,9 +531,17 @@ which the GBA BIOS validates. See [`payload/README.md`](payload/README.md).
 | Document | |
 |---|---|
 | [`BENCH.md`](BENCH.md) | Step-by-step bring-up. **Start here if it does not work** |
+| [`diagnostics/`](diagnostics/) | **Ten link diagnostics and the notes behind them** — see its README |
 | [`diagnostics/CABLES.md`](diagnostics/CABLES.md) | Cable continuity tables, per cable type |
-| [`diagnostics/POSTMORTEM.md`](diagnostics/POSTMORTEM.md) | What went wrong during bring-up, and how each fault was caught |
 | [`diagnostics/TESTPLAN.md`](diagnostics/TESTPLAN.md) | Bench procedure |
+| [`diagnostics/POSTMORTEM.md`](diagnostics/POSTMORTEM.md) | What went wrong during bring-up, and how each fault was caught |
+
+**The diagnostics ship with the release on purpose.** The link runs over jacks that were never
+meant to carry SPI, through a cable whose internal wiring is not standardised, and the failures
+are silent — a transposed pair, a missing conductor and a console that simply is not listening
+all present as "nothing happens". Guessing between those is expensive; measuring is not. They
+also reuse the applet's own transport, so a pass exercises the real code path rather than a
+simulation of it.
 
 ## Credits & references
 
