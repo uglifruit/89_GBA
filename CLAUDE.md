@@ -366,9 +366,21 @@ cd payload && ./build.sh
 - Match `96_cathode`'s CMake link set and `set_sys_clock_khz(144000, true)` (clean multiple
   of 48 MHz → tidy PIO clkdivs).
 - **`info.yaml`'s schema is set by what the program listing at computer.musicthing.co.uk parses,
-  and it is NOT obvious — check a live release before changing it.** Verified against
-  `104_barbers_pole` and `96_cathode`, key order as written:
-  `draft`, `Name` (no card number — the site prepends that from the folder), `short-description`
+  and it is NOT obvious — do not just eyeball a live release before changing it, RUN THE
+  VALIDATOR.** The monorepo carries one: `tools/sitegen/src/validate/cli.js` in
+  `TomWhitwell/Workshop_Computer` (`node tools/sitegen/src/validate/cli.js
+  releases/108_GBA/info.yaml` from the monorepo root). A visual diff against another release's
+  `info.yaml` proved actively misleading here — the `controls` shape had moved on since this file
+  was last checked against `104_barbers_pole`/`96_cathode` (2026-09-10: `panel.inputs`/`outputs`
+  now enforce an exact id enum — `AudioIn1/2`, `CVIn1/2`, `PulseIn1/2`, `AudioOut1/2`, `CVOut1/2`,
+  `PulseOut1/2`, no shorthand like `Audio1` or `Pulse2`; knobs are `controls.knobs` entries
+  (`main`/`x`/`y`, each `{name, description}`), not fake panel inputs; `controls.switch` is an
+  object keyed by `up`/`middle`/`down`/`tap`, not a list; `controls.leds` is a list of *groups*,
+  each `{display, items: [...]}`, not a flat list of LEDs) — and the validator caught it, a stale
+  reference release would not have. Also run `git diff --name-status -z upstream/main...HEAD |
+  node tools/sitegen/src/validate/prRulesCli.js out.json` before opening the PR — a second,
+  separate check the site runs over the whole submission diff. Key order as written: `draft`,
+  `Name` (no card number — the site prepends that from the folder), `short-description`
   (**not** `Description`), `Language`, `Creator`, `Version`, `Status`, `License`, `repository`
   (lowercase, and it points at the UPSTREAM repo, not the release folder), `Editor`,
   `date-created`, `date-updated`, then the blocks `contact`, `uf2`, `tags`, `summary`
