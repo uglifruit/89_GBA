@@ -21,11 +21,11 @@ uf2:
 
 tags:
   - gba
-  - link cable
+  - link-cable
   - multiboot
   - chiptune
   - psg
-  - synth voice
+  - synth-voice
   - drums
   - screen
   - quantiser
@@ -117,27 +117,18 @@ panel:
     - id: CVIn2
       name: Pitch
       description: 1V/oct pitch CV. Trim tracking on the GBA CAL page (CV inputs are not factory calibrated)
-    - id: Pulse2
+    - id: PulseIn2
       name: Gate
       description: Gate and trigger. Edges shorter than the 1ms poll are still caught
     - id: CVIn1
       name: Mod 1
       description: Unassigned by default - nothing should move that you did not patch. Give it a job on the MAP page
-    - id: Audio1
+    - id: AudioIn1
       name: Mod 2
       description: Unassigned by default; assignable on the MAP page, with per-voice tickboxes
-    - id: Audio2
+    - id: AudioIn2
       name: Mod 3
       description: Unassigned by default; assignable on the MAP page, with per-voice tickboxes
-    - id: Main
-      name: Knob A
-      description: Level of channel 3 by default; assignable on the MAP page
-    - id: X
-      name: Knob B
-      description: Attack, both envelopes together, by default; assignable on the MAP page
-    - id: Y
-      name: Knob C
-      description: Release, both envelopes together, by default; assignable on the MAP page
     - id: PulseIn1
       name: GBA SO (MISO)
       description: Serial data back from the GBA. Read directly via PIO, not the 48kHz pulse path
@@ -162,23 +153,37 @@ panel:
       description: High while the GBA's B button is held
 
 controls:
+  knobs:
+    - main:
+        name: Level (Ch. 3)
+        description: Level of channel 3 by default; assignable on the MAP page
+      x:
+        name: Attack
+        description: Attack, both envelopes together, by default; assignable on the MAP page
+      y:
+        name: Release
+        description: Release, both envelopes together, by default; assignable on the MAP page
+
   switch:
-    - id: Down
+    down:
       name: Trigger
       description: Momentary down fires a note; a column of the GBA's TRIG grid
-    - id: Up
+    up:
       name: Modulation
       description: An eighth source on the GBA's MAP page - assign it to anything. Up is full, middle and down are zero
+
   leds:
-    - id: LED0
-      name: Link (solid booted, blinking connecting)
-    - id: LED1
-      name: Gate in / upload progress / fault code bit 0
-    - id: LED2
-      name: Note sounding / upload progress / fault code bit 1
-    - id: LED3
-      name: Editing on the GBA / upload progress / fault code bit 2
-    - id: LED4
-      name: Edit page bit 0 / upload progress
-    - id: LED5
-      name: Edit page bit 1 / upload progress
+    - display: list
+      items:
+        - id: LED0
+          name: Link (solid booted, blinking connecting)
+        - id: LED1
+          name: Gate in / upload progress / fault code bit 0
+        - id: LED2
+          name: Note sounding / upload progress / fault code bit 1
+        - id: LED3
+          name: Editing on the GBA / upload progress / fault code bit 2
+        - id: LED4
+          name: Edit page bit 0 / upload progress
+        - id: LED5
+          name: Edit page bit 1 / upload progress
