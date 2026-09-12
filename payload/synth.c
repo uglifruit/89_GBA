@@ -191,6 +191,17 @@ static int32_t clampi(int32_t v, int32_t lo, int32_t hi)
     return v < lo ? lo : (v > hi ? hi : v);
 }
 
+void synth_cv2_tuner(int *note, int *cents)
+{
+    refresh_cv_recip();     // pick up a CV SCALE edit immediately, not next tick
+    int32_t raw     = (int32_t)g_in[SRC_CV2] - 2048;
+    int32_t semiQ8  = ((raw - g_patch.cvOffset) * g_cvRecip) >> 12;
+    int32_t pitchQ8 = ((int32_t)g_patch.baseNote << 8) + semiQ8;
+    int32_t n       = clampi((pitchQ8 + 128) >> 8, 0, 127);
+    *note  = (int)n;
+    *cents = (int)(((pitchQ8 - (n << 8)) * 100) >> 8);
+}
+
 int synth_patch_bytes(void) { return (int)sizeof(Patch); }
 
 // ACCEPT OLDER VERSIONS THAT CAN BE BROUGHT FORWARD, not just the current one. See

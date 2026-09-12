@@ -233,6 +233,11 @@ int  synth_patch_valid(const Patch *p);
 void synth_patch_migrate(Patch *p);   // bring an older-but-compatible patch up to date, in place
 void synth_patch_applied(void);       // re-derive anything cached from the patch
 
+// The CAL page's live tuner: what CV In 2's raw voltage means through the CURRENT calibration
+// alone, at unity depth and ignoring any scale/key quantisation - independent of how CV In 2
+// happens to be mapped on the MAP page right now. note is 0-127, cents is roughly -50..+50.
+void synth_cv2_tuner(int *note, int *cents);
+
 // Button state, sampled at the control rate; the UI drains the latches at frame rate.
 extern uint16_t g_btn;
 extern volatile uint16_t g_btnEdgeLatch;

@@ -403,6 +403,25 @@ of a hunt by ear.
 `CV OFFSET` then moves the whole range without changing its span, and `BASE NOTE` sets what
 0 V means (C2 by default).
 
+### The live tuner
+
+Below the list, two lines update as you patch:
+
+```
+IN  C3 +07c   RAW  2048
+OUT C3        CAL
+```
+
+`IN` reads CV In 2's raw voltage straight through the *current* calibration — note name plus
+cents, at unity depth and ignoring any scale or key — so it moves the instant you nudge `CV
+SCALE` or `CV OFFSET`, without needing a note to actually sound. `OUT` is the note really
+playing on channel 1 right now, after the modulation matrix and any scale quantising.
+
+Patch a running sequence into CV In 2 and watch both at once: trim until `IN` reads dead on
+(0c) at each step, and check `OUT` matches what you expect — if it does not, a scale or key is
+quantising it there on purpose, which is worth knowing before you conclude the calibration is
+wrong. `RAW` is unchanged from before and is what the two-point trim above still reads.
+
 > **The shipped default of 3312 is a bench measurement from one module, not a specification.**
 > It replaced a value calculated on the assumption that the inputs span ±6 V over the full 4096
 > counts — which turned out to want about 2.2 V per octave in practice, because the ADC keeps

@@ -1061,26 +1061,50 @@ static void edit_extras(void)
     case PAGE_SET: draw_user_scale(14, 92); break;
 
     case PAGE_CAL: {
-        // Only redrawn when the RENDERED text changes, and the raw count is masked to the top
-        // bits so ADC dither alone cannot repaint it every frame.
-        static char lastLine[48] = { 1, 0 };
-        int at = scopy(buf, 0, "READS ");
-        char n[8];
-        note_text(n, g_note);
-        at = scopy(buf, at, n);
-        at = scopy(buf, at, "   RAW ");
-        char r[8];
-        dec32(r, (uint32_t)(g_in[LINK_IN_CV2] & 0xFF0u), 5);
-        at = scopy(buf, at, r);
-        scopy(buf, at, (g_hostCaps & GBA_CAP_CVOUT_CAL) ? "  CAL" : "  UNCAL");
+        // A live two-line tuner below the list, each redrawn only when its rendered text
+        // changes (the raw count is masked to the top bits so ADC dither alone cannot repaint
+        // it every frame):
+        //   IN  - what CV In 2's raw voltage means through the CURRENT calibration alone, at
+        //         unity depth and ignoring any scale/key quantisation. This is the reading to
+        //         trim CV SCALE/OFFSET against, whatever CV In 2 happens to be mapped to.
+        //   OUT - the note actually sounding on channel 0 right now, after the modulation
+        //         matrix and any scale quantisation - i.e. what the calibrated CV Out 2 is
+        //         really sending. Patch a sequence into CV In 2 and the two lines together show
+        //         both "is the calibration right" and "is what comes out what I expect".
+        static char lastIn[48]  = { 1, 0 };
+        static char lastOut[48] = { 1, 0 };
+        char tmp[8];
+
+        int inNote, inCents;
+        synth_cv2_tuner(&inNote, &inCents);
+
+        int at = scopy(buf, 0, "IN  ");
+        note_text(tmp, inNote);
+        at = scopy(buf, at, tmp);
+        sdec32(tmp, inCents, 4);
+        at = scopy(buf, at, tmp);
+        at = scopy(buf, at, "c   RAW ");
+        dec32(tmp, (uint32_t)(g_in[LINK_IN_CV2] & 0xFF0u), 5);
+        scopy(buf, at, tmp);
 
         // y=114, not 104: the list is eight rows now (CV 2 IN was added for the 1V/oct trim)
         // and ends at y=110, so the old position sat on top of the LINK row - and the clear
         // rect took a bite out of it every time the reading changed.
-        if (!streq(buf, lastLine)) {
-            scopy(lastLine, 0, buf);
+        if (!streq(buf, lastIn)) {
+            scopy(lastIn, 0, buf);
             srect(10, 114, SCREEN_W - 20, 10, COL_BG);
             text(14, 114, buf, COL_MID, 1);
+        }
+
+        at = scopy(buf, 0, "OUT ");
+        note_text(tmp, g_note);
+        at = scopy(buf, at, tmp);
+        scopy(buf, at, (g_hostCaps & GBA_CAP_CVOUT_CAL) ? "        CAL" : "        UNCAL");
+
+        if (!streq(buf, lastOut)) {
+            scopy(lastOut, 0, buf);
+            srect(10, 125, SCREEN_W - 20, 10, COL_BG);
+            text(14, 125, buf, COL_MID, 1);
         }
 
         break;
