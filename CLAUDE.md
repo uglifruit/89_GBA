@@ -316,6 +316,20 @@ is the one editor action that happens mid-performance, so START lands on it.
 6. **The `-nostdlib` tripwire is doing real work.** It has caught a `% rows` with a variable
    divisor, a drum-sweep divide, and an implicit `memcpy` from a struct assignment — each a LINK
    error rather than a silent bug. Do not "fix" it by linking libgcc.
+7. **A large `rect()` blocks `gfx_idle()` for as long as the fill takes — several milliseconds
+   for a full-screen clear — and that pauses the synth's control tick and the link poll for the
+   same span, not just the redraw.** `gfx_idle()`'s own comment already says this ("the control
+   tick used to advance only once per main-loop iteration, so the effective control rate was the
+   FRAME rate"), but it was only ever wired into `text()` (per character) and `srect()` (once,
+   after). Every one-time, page-or-mode-change body/screen clear — `play_static()`,
+   `edit_static()`, the SELECT-navigation blank, and every page's `!xInit`/cache-invalidated list
+   clear — was a plain, un-chunked `rect()` covering 100+ rows with **zero** `gfx_idle()` calls
+   during the fill, so pressing START or changing pages could stall a running envelope or
+   portamento, or drop a link poll, for the whole clear. `rect_clear()` in `gfx.c` is the fix:
+   the same fill, banded into 8-row chunks with a `gfx_idle()` between each. **Use it, not
+   `rect()`, for any clear that is not itself bounded to a handful of rows** — small per-frame
+   boxes (tabs, tickboxes, meters) are fine with plain `rect()`, since a handful of rows is not
+   worth the per-band overhead and they were never the source of this.
 
 ## The multiboot protocol
 
