@@ -444,18 +444,19 @@ this is a number you can dial rather than a firmware rebuild.
 
 `TUNING` (master, in cents), `KEY`, `SCALE`, `OCTAVE`, and the user-scale editor.
 
-Twenty scales: CHROMATIC, MAJOR, DORIAN, PHRYGIAN, LYDIAN, MIXOLYD, MINOR, LOCRIAN, HARM MIN,
-PENTA MAJ, PENTA MIN, BLUES, HIRAJOSHI, IN SEN, WHOLE, USER 1–4, then FREE.
+Twenty scales: FREE, then CHROMATIC, MAJOR, DORIAN, PHRYGIAN, LYDIAN, MIXOLYD, MINOR, LOCRIAN,
+HARM MIN, PENTA MAJ, PENTA MIN, BLUES, HIRAJOSHI, IN SEN, WHOLE, then USER 1–4.
+
+**FREE is first, and the factory default.** It quantises nothing at all: pitch passes through
+exactly as the calibrated CV reads it, fractional cents and all, all the way to the PSG's period
+register — the setting for a CV source that should glide continuously (an envelope, an LFO, a
+slide generator) rather than being pulled onto a grid of any kind. CV Out 2 keeps reporting the
+nearest whole semitone regardless of this setting, since it has no way to carry a fraction of
+one.
 
 **CHROMATIC still quantises — to the nearest semitone, with all twelve degrees valid** — and any
 other built-in or user scale narrows that to its own degrees. Because the quantiser snaps the
 *target*, portamento still glides into it rather than being stepped away.
-
-**FREE is the one entry that quantises nothing at all.** Pitch passes through exactly as the
-calibrated CV reads it, fractional cents and all, all the way to the PSG's period register — the
-setting for a CV source that should glide continuously (an envelope, an LFO, a slide generator)
-rather than being pulled onto a grid of any kind. CV Out 2 keeps reporting the nearest whole
-semitone regardless of this setting, since it has no way to carry a fraction of one.
 
 To edit a user scale, select USER 1–4 and move to `SCALE NOTES`: the twelve semitones are drawn
 as a row of toggles. CHROMATIC shows `BUILT IN` there and FREE shows `N/A` — neither has degrees

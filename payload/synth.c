@@ -42,9 +42,10 @@ const char *pan_name[4] = { "OFF", "L", "R", "BOTH" };
 const char *key_name[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
 
 const char *scale_name[SCALE_COUNT] = {
+    "FREE",
     "CHROMATIC", "MAJOR", "DORIAN", "PHRYGIAN", "LYDIAN", "MIXOLYD", "MINOR", "LOCRIAN",
     "HARM MIN", "PENTA MAJ", "PENTA MIN", "BLUES", "HIRAJOSHI", "IN SEN", "WHOLE",
-    "USER 1", "USER 2", "USER 3", "USER 4", "FREE"
+    "USER 1", "USER 2", "USER 3", "USER 4"
 };
 
 // Scale membership as a 12-bit mask: bit n set if semitone n above the key is in the scale.
@@ -216,6 +217,11 @@ int synth_patch_valid(const Patch *p)
 // migrated from the bytes alone, and synth_patch_valid rejects those instead.
 //
 // v2 -> v3: cvScale went from counts per semitone in 1/16ths to 1/256ths, for the resolution.
+//
+// v3 -> v4: FREE moved from one past USER 4 (where it did not exist before this version) to
+// index 0, taking over the slot CHROMATIC used to occupy - everything from CHROMATIC through
+// USER 4 shifts up by one to make room. Every patch older than v4 predates FREE entirely, so
+// this is an unconditional +1, clamped for safety though it can never actually reach the top.
 void synth_patch_migrate(Patch *p)
 {
     if (p->version == 2) {
@@ -224,6 +230,9 @@ void synth_patch_migrate(Patch *p)
         // would load quietly mistuned instead of loudly broken.
         int32_t q8 = (int32_t)p->cvScale * 16;
         p->cvScale = (int16_t)clampi(q8, 1024, 32767);
+    }
+    if (p->version <= 3) {
+        p->scale = (uint8_t)clampi((int32_t)p->scale + 1, 0, SCALE_COUNT - 1);
     }
     p->version = PATCH_VERSION;
 }
@@ -296,7 +305,7 @@ void synth_default_patch(void)
     p->baseNote   = 36;         // 0 V = C2
     p->tuneCents  = 0;
     p->key        = 0;
-    p->scale      = 0;          // chromatic: quantiser off
+    p->scale      = SCALE_FREE; // no quantiser: the factory patch glides straight off the CV
     p->drumMode   = 0;
     p->drumThresh = 6;
 
@@ -432,20 +441,26 @@ static uint16_t period_for(int32_t pitchQ8, int semitoneShift)
     return (uint16_t)(a + (((b - a) * frac) >> 8));
 }
 
+// idx is never SCALE_FREE here - both call sites below skip quantise() entirely for it, since
+// it would otherwise land on SCALE_MASK[-1]. Everything else shifts down by one to reach the
+// SCALE_MASK/userScale arrays; see SCALE_FREE's comment in synth.h.
 static uint16_t scale_mask_for(int idx)
 {
-    if (idx < SCALE_BUILTIN) return SCALE_MASK[idx];
-    uint16_t m = g_patch.userScale[(idx - SCALE_BUILTIN) & 3];
+    if (idx <= SCALE_BUILTIN) return SCALE_MASK[idx - 1];
+    uint16_t m = g_patch.userScale[(idx - 1 - SCALE_BUILTIN) & 3];
     return m ? (uint16_t)(m & 0x0FFF) : 0x0FFF;   // an empty user scale would silence everything
 }
 
 // Snap a note to the NEAREST degree of the current key and scale, not the one below it. Rounding
 // down makes a slow upward CV sweep hang on each degree until it is a full step past — the note
 // you hear lags the voltage you can see. Nearest splits the difference and tracks properly.
+//
+// CHROMATIC (scaleIdx 1) has no special case here any more: scale_mask_for(1) is SCALE_MASK[0],
+// the "every semitone valid" mask, so the loop below finds a match at d=0 and returns the input
+// note unchanged - correctly, since rounding to the nearest of twelve-out-of-twelve degrees is
+// just rounding to the nearest semitone, which the caller already did before calling in.
 static int32_t quantise(int32_t note, int scaleIdx, int key)
 {
-    if (scaleIdx == 0) return note;
-
     uint16_t mask = scale_mask_for(scaleIdx);
     int32_t  rel  = note - key;
     int32_t  oct  = rel / 12;                  // constant divisor
@@ -652,10 +667,10 @@ static void synth_tick(void)
                  + (((int32_t)p->tuneCents * 256) / 100);    // master tuning, constant divisor
     g_pitchQ8 = clampi(base + modPitch[0], (int32_t)NOTE_MIN << 8, (int32_t)NOTE_MAX << 8);
     uint8_t note = (uint8_t)clampi((g_pitchQ8 + 128) >> 8, 0, 127);
-    // FREE never reaches quantise(): scaleIdx would alias onto USER 1's mask via scale_mask_for
-    // (see SCALE_FREE's comment in synth.h). CHROMATIC (0) still goes through it - the mask is
-    // 0xFFF, so it is a no-op that returns the already-rounded note unchanged.
-    if (scaleIdx != 0 && scaleIdx != SCALE_FREE)
+    // FREE never reaches quantise(): scale_mask_for() would land on SCALE_MASK[-1] (see
+    // SCALE_FREE's comment in synth.h). CHROMATIC still goes through it - the mask is 0xFFF, so
+    // it is a no-op that returns the already-rounded note unchanged.
+    if (scaleIdx != SCALE_FREE)
         note = (uint8_t)clampi(quantise(note, scaleIdx, keyIdx), 0, 127);
     g_note = note;
 
@@ -810,17 +825,17 @@ static void synth_tick(void)
     // ---- per-voice pitch and portamento -----------------------------------------------------------
     // The quantiser snaps the TARGET; portamento then slides to it, so a scale still glides.
     //
-    // CHROMATIC (scaleIdx 0) used to skip this entirely, which was wrong: it left every note a
-    // continuous, unrounded Q8 value all the way to period_for(), so "chromatic" actually meant
-    // no quantisation at all rather than quantising to the (trivial, all-degrees) chromatic
-    // scale. It now always rounds to the nearest semitone here, same as CHROMATIC already did
-    // for g_note - quantise(note, 0, key) is a no-op that returns the rounded note unchanged,
-    // since the chromatic mask has every bit set.
+    // CHROMATIC used to be scaleIdx 0 and skip this entirely, which was wrong: it left every
+    // note a continuous, unrounded Q8 value all the way to period_for(), so "chromatic" actually
+    // meant no quantisation at all rather than quantising to the (trivial, all-degrees) chromatic
+    // scale. It now always rounds to the nearest semitone here, same as it already did for
+    // g_note - quantise(note, scaleIdx, key) is a no-op for CHROMATIC that returns the rounded
+    // note unchanged, since the chromatic mask has every bit set.
     //
-    // FREE is the new home for the old behaviour: it skips this rounding on purpose; the scale
-    // it never reaches quantise() at all, since that would alias onto USER 1's mask (see
-    // SCALE_FREE's comment in synth.h). This is what lets a continuously-varying CV in glide the
-    // PSG's pitch smoothly instead of stepping semitone to semitone.
+    // FREE (scaleIdx 0, and the factory default) is the new home for the old behaviour: it skips
+    // this rounding on purpose, and it never reaches quantise() at all, since that would land on
+    // SCALE_MASK[-1] (see SCALE_FREE's comment in synth.h). This is what lets a continuously-
+    // varying CV in glide the PSG's pitch smoothly instead of stepping semitone to semitone.
     int detune = (int)clampi((int32_t)p->detune + (modDetune >> 2), -128, 127);
 
     for (int c = 0; c < 4; c++) {

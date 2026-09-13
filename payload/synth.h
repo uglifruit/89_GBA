@@ -130,15 +130,19 @@ typedef struct {
 } ModSlot;
 
 // ---- scales ----
-// Fifteen built in, then four the user builds note by note on the SET page.
+// FREE is index 0 and the factory default: no quantisation at all, so a continuously-varying
+// CV source (an envelope, an LFO, a slide generator) glides rather than being pulled onto any
+// grid. It is NOT folded into the SCALE_MASK/userScale indexing the other two groups use - it
+// never reaches scale_mask_for() - so scale_mask_for() shifts every index down by one to land
+// on those arrays: 1..SCALE_BUILTIN are the built-in mask scales (SCALE_MASK[idx-1]), and
+// SCALE_BUILTIN+1..SCALE_COUNT-1 are the four USER slots (userScale[idx-1-SCALE_BUILTIN]).
+// Anywhere that tests "is this a real user scale" must be idx > SCALE_BUILTIN, not idx >=
+// SCALE_BUILTIN - FREE(0) already fails that fine, but the old ">=" form is a trap once you
+// forget FREE isn't at the high end any more.
+#define SCALE_FREE    0
 #define SCALE_BUILTIN 15
 #define SCALE_USER    4
-// FREE is one past the last USER slot, not folded into the SCALE_MASK/userScale indexing those
-// use - it never reaches scale_mask_for(), and every place that tests "is this a real scale I
-// can edit degrees of" must exclude it explicitly (idx >= SCALE_BUILTIN && idx < SCALE_FREE),
-// not just idx >= SCALE_BUILTIN, or it aliases onto USER 1's mask.
-#define SCALE_FREE    (SCALE_BUILTIN + SCALE_USER)
-#define SCALE_COUNT   (SCALE_BUILTIN + SCALE_USER + 1)
+#define SCALE_COUNT   (1 + SCALE_BUILTIN + SCALE_USER)
 extern const char *scale_name[SCALE_COUNT];
 extern const char *key_name[12];
 
@@ -178,7 +182,9 @@ extern const char *drum_name[DRUM_PRESETS];
 //       those cannot be recovered from the bytes alone - synth_patch_valid() rejects them.
 //   v3  cvScale went from counts per semitone in 1/16ths to 1/256ths. Same layout, different
 //       meaning, so synth_patch_migrate() brings it forward instead of throwing it away.
-#define PATCH_VERSION 3
+//   v4  FREE moved from one past USER 4 to index 0, ahead of CHROMATIC. Same layout, every
+//       scale index's meaning shifts by +1; migrated the same way.
+#define PATCH_VERSION 4
 
 typedef struct {
     uint16_t magic;

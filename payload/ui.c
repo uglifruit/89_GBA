@@ -418,8 +418,11 @@ static void field_value(int page, int row, char *buf)
         case 2: scopy(buf, 0, scale_name[p->scale % SCALE_COUNT]); return;
         case 3: sdec32(buf, p->octave, 3); return;
         default:
-            if (p->scale < SCALE_BUILTIN) { scopy(buf, 0, "BUILT IN"); return; }
-            if (p->scale == SCALE_FREE)   { scopy(buf, 0, "N/A"); return; }
+            // FREE is index 0, checked first: it would otherwise also pass "< SCALE_BUILTIN"
+            // below, since the built-in scales now start at 1, not 0 - see SCALE_FREE's comment
+            // in synth.h.
+            if (p->scale == SCALE_FREE)  { scopy(buf, 0, "N/A"); return; }
+            if (p->scale <= SCALE_BUILTIN) { scopy(buf, 0, "BUILT IN"); return; }
             dec_at(buf, scopy(buf, 0, "DEGREE "), (uint32_t)g_degCol);
             return;
         }
@@ -969,12 +972,13 @@ static int g_scaleShape = -1;
 static void draw_user_scale(int x, int y)
 {
     Patch *p = &g_patch;
-    // FREE sits past the last USER slot and is not one - see SCALE_FREE's comment in synth.h.
-    int isUser = (p->scale >= SCALE_BUILTIN && p->scale < SCALE_FREE);
+    // FREE is index 0, before the built-in scales, not past the last USER slot any more - see
+    // SCALE_FREE's comment in synth.h. It already fails ">", so only ">" (not ">=") is needed.
+    int isUser = (p->scale > SCALE_BUILTIN);
 
     // -2 is the "no grid" state. Returning early on a built-in scale merely stopped DRAWING the
     // grid, which left the previous USER scale's boxes sitting on screen after you stepped past.
-    int shape = isUser ? ((p->userScale[(p->scale - SCALE_BUILTIN) & 3] << 8)
+    int shape = isUser ? ((p->userScale[(p->scale - SCALE_BUILTIN - 1) & 3] << 8)
                           | (g_degCol << 2) | (p->scale & 3))
                        : -2;
     if (shape == g_scaleShape) return;
@@ -983,7 +987,7 @@ static void draw_user_scale(int x, int y)
     rect(x - 2, y - 2, 196, 22, COL_BG);
     if (!isUser) return;
 
-    uint16_t m = p->userScale[(p->scale - SCALE_BUILTIN) & 3];
+    uint16_t m = p->userScale[(p->scale - SCALE_BUILTIN - 1) & 3];
     for (int d = 0; d < 12; d++) {
         int bx = x + d * 16;
         rect(bx, y, 14, 11, (d == g_degCol) ? COL_SEL : COL_DIM);
@@ -1266,9 +1270,9 @@ void ui_frame(void)
                 if (steps & KEY_LEFT)  o->step[i] = (int8_t)clampi(o->step[i] - 12, -24, 24);
             }
 
-        } else if (g_page == PAGE_SET && g_row == 4 &&
-                   g_patch.scale >= SCALE_BUILTIN && g_patch.scale < SCALE_FREE) {
-            uint16_t *m = &g_patch.userScale[(g_patch.scale - SCALE_BUILTIN) & 3];
+        } else if (g_page == PAGE_SET && g_row == 4 && g_patch.scale > SCALE_BUILTIN) {
+            // FREE (index 0) already fails this - see SCALE_FREE's comment in synth.h.
+            uint16_t *m = &g_patch.userScale[(g_patch.scale - SCALE_BUILTIN - 1) & 3];
             if (!adj) {
                 if (steps & KEY_RIGHT) g_degCol = (uint8_t)((g_degCol + 1 >= 12) ? 0 : g_degCol + 1);
                 if (steps & KEY_LEFT)  g_degCol = (uint8_t)((g_degCol == 0) ? 11 : g_degCol - 1);

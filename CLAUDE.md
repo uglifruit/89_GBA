@@ -263,7 +263,9 @@ wrong but *silently* wrong.
 bytes alone, so `synth_patch_valid()` rejects it. A change of meaning at the same layout can be
 brought forward exactly, and `synth_patch_migrate()` does that in place — call it after the byte
 copy and **before** `synth_patch_applied()`, which derives cached values from the fields. v2 grew
-`mod[]` (rejected); v3 moved `cvScale` from Q4 to Q8 (migrated by ×16). Prefer migrating: a
+`mod[]` (rejected); v3 moved `cvScale` from Q4 to Q8 (migrated by ×16); v4 moved FREE from one
+past USER 4 to index 0 ahead of CHROMATIC, so every stored `scale` index shifts by +1 (migrated
+unconditionally for anything older than v4). Prefer migrating: a
 version bump that throws away the user's saved patches should be a last resort, not the default. `sizeof(Patch)` is 238 of the 256-byte slot; `patch_fits_a_slot` in `synth.c`
 is the backstop, and `arm-none-eabi-nm --print-size` on an object declaring a `Patch` is how to
 read the real number.
