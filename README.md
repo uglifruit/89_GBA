@@ -422,10 +422,12 @@ Patch a running sequence into CV In 2 and watch both at once: trim until `IN` re
 quantising it there on purpose, which is worth knowing before you conclude the calibration is
 wrong. `RAW` is unchanged from before and is what the two-point trim above still reads.
 
-> **The shipped default of 3312 is a bench measurement from one module, not a specification.**
-> It replaced a value calculated on the assumption that the inputs span ±6 V over the full 4096
-> counts — which turned out to want about 2.2 V per octave in practice, because the ADC keeps
-> substantial over-range headroom either side of the nominal input range. Expect to trim it.
+> **The shipped default of 7422 is a bench measurement from one module, not a specification —
+> expect to trim it on yours.** It replaced an earlier default of 3312 from a different module,
+> which needed roughly 2.2x the CV swing per octave that the naive ±6 V-over-4096-counts
+> calculation predicts (28.44 counts/semitone, 7282 in Q8) — evidently the ADC's over-range
+> headroom is not consistent module to module. 7422 lands within 2% of that calculated figure, so
+> this particular module tracks close to the nominal spec; yours may not.
 
 **Why the constant is stored so finely.** Pitch error accumulates with distance from the
 calibration point, so a coarse constant is not a small error at the far end of the keyboard. In
@@ -442,15 +444,22 @@ this is a number you can dial rather than a firmware rebuild.
 
 `TUNING` (master, in cents), `KEY`, `SCALE`, `OCTAVE`, and the user-scale editor.
 
-Nineteen scales: CHROMATIC, MAJOR, DORIAN, PHRYGIAN, LYDIAN, MIXOLYD, MINOR, LOCRIAN, HARM MIN,
-PENTA MAJ, PENTA MIN, BLUES, HIRAJOSHI, IN SEN, WHOLE, then USER 1–4.
+Twenty scales: CHROMATIC, MAJOR, DORIAN, PHRYGIAN, LYDIAN, MIXOLYD, MINOR, LOCRIAN, HARM MIN,
+PENTA MAJ, PENTA MIN, BLUES, HIRAJOSHI, IN SEN, WHOLE, USER 1–4, then FREE.
 
-**CHROMATIC means the quantiser is off.** Any other scale snaps incoming pitch to the nearest
-degree — and because the quantiser snaps the *target*, portamento still glides into it rather
-than being stepped away.
+**CHROMATIC still quantises — to the nearest semitone, with all twelve degrees valid** — and any
+other built-in or user scale narrows that to its own degrees. Because the quantiser snaps the
+*target*, portamento still glides into it rather than being stepped away.
+
+**FREE is the one entry that quantises nothing at all.** Pitch passes through exactly as the
+calibrated CV reads it, fractional cents and all, all the way to the PSG's period register — the
+setting for a CV source that should glide continuously (an envelope, an LFO, a slide generator)
+rather than being pulled onto a grid of any kind. CV Out 2 keeps reporting the nearest whole
+semitone regardless of this setting, since it has no way to carry a fraction of one.
 
 To edit a user scale, select USER 1–4 and move to `SCALE NOTES`: the twelve semitones are drawn
-as a row of toggles.
+as a row of toggles. CHROMATIC shows `BUILT IN` there and FREE shows `N/A` — neither has degrees
+to edit.
 
 ---
 

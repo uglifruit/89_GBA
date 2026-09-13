@@ -133,7 +133,12 @@ typedef struct {
 // Fifteen built in, then four the user builds note by note on the SET page.
 #define SCALE_BUILTIN 15
 #define SCALE_USER    4
-#define SCALE_COUNT   (SCALE_BUILTIN + SCALE_USER)
+// FREE is one past the last USER slot, not folded into the SCALE_MASK/userScale indexing those
+// use - it never reaches scale_mask_for(), and every place that tests "is this a real scale I
+// can edit degrees of" must exclude it explicitly (idx >= SCALE_BUILTIN && idx < SCALE_FREE),
+// not just idx >= SCALE_BUILTIN, or it aliases onto USER 1's mask.
+#define SCALE_FREE    (SCALE_BUILTIN + SCALE_USER)
+#define SCALE_COUNT   (SCALE_BUILTIN + SCALE_USER + 1)
 extern const char *scale_name[SCALE_COUNT];
 extern const char *key_name[12];
 

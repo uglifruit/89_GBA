@@ -131,6 +131,18 @@ C-compatible (payload is C, firmware is C++): plain `#define` and `static inline
   cleared by another has two writers, and the losing interleaving is exactly the one that
   matters — an edge arriving between the read and the clear vanishes. Each side keeps its own
   tally and advances by one per edge, so a sub-millisecond trigger is never lost or merged.
+- **CONTROL WORDS HAVE NO CHECK BITS — `decode_applet`'s CONTROL case dispatches on the opcode
+  with zero validation, unlike STREAM's 2-bit parity.** An edge-only CONTROL message (sent once,
+  on change, and never repeated) is one bad word away from a state that is wrong FOR EVER: noise
+  from moving the module can flip a word's top three bits to `000` and its opcode bits to a real
+  one by pure chance, and the GBA has no way to reject it. This bit SWITCH once: it was sent only
+  when the switch actually moved, so a corrupted "SW down" looked exactly like a held switch and
+  stayed a stuck trigger source until the next real switch movement corrected it — sometimes
+  read as "the switch is broken," when it was a single mis-decoded word. `gba_link.cpp` now
+  re-announces SWITCH every ~64 words (~64 ms) even when unchanged, the same self-healing pattern
+  HELLO (every ~2 s, so a missed word doesn't leave the CAL page's calibration flag wrong for
+  ever) and SLOTS (every ~0.5 s) already used for the identical reason. **Any new edge-only
+  CONTROL opcode needs the same periodic re-announce, or it inherits this exact failure mode.**
 
 ## GBA-side gotchas that cost silence, not errors
 
