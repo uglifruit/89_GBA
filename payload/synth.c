@@ -311,12 +311,12 @@ void synth_default_patch(void)
 
     // COUNTS PER SEMITONE, Q8. MEASURED, NOT CALCULATED - AND IT VARIES BY MODULE.
     //
-    // 7422 is a second bench trim, by ear against a two-octave interval on a different Workshop
-    // unit than the one 3312 came from - and unlike that one, it lands within 2% of the value
-    // CALCULATED from the CV inputs spanning +-6 V over the full 4096 counts (341 counts/V,
-    // 28.44 per semitone, 7282 in Q8). The original unit needed about 2.2x that - 3312, measured
-    // 12.94 counts/semitone - so the ADC's over-range headroom evidently is not consistent
-    // module to module. TRIM THIS ON EVERY UNIT; do not assume either number travels.
+    // 3372 is a bench trim by ear against a two-octave interval, close to (but not identical to)
+    // an earlier trim of 3312 from a first module and well under an intermediate reading of 7422
+    // that a second bench pass produced - a reminder that TRIM THIS ON EVERY UNIT, do not assume
+    // any of these numbers travels, and re-trim rather than reuse if the reading looks off by
+    // roughly double or half: that ratio is exactly what a one-octave-vs-two-octave measurement
+    // mistake produces, and it is the easiest way to get a bench trim quietly wrong.
     //
     // Q8 RATHER THAN Q4 BECAUSE PITCH ERROR ACCUMULATES WITH DISTANCE FROM THE CALIBRATION
     // POINT. One Q4 step is 0.48%, which is 17 cents three octaves up - so 206 and 207 straddled
@@ -329,7 +329,7 @@ void synth_default_patch(void)
     // trimmable and the CAL page carries a live tuner: two readings a known interval apart give
     // CV SCALE directly as 256 * (high - low) / semitones. There is no factory calibration for
     // the CV INPUTS, so neither number can ever be more than a good starting point.
-    p->cvScale  = 7422;
+    p->cvScale  = 3372;
     p->cvOffset = -34;
 
     // ---- the modulation matrix -------------------------------------------------------------

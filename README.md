@@ -422,12 +422,12 @@ Patch a running sequence into CV In 2 and watch both at once: trim until `IN` re
 quantising it there on purpose, which is worth knowing before you conclude the calibration is
 wrong. `RAW` is unchanged from before and is what the two-point trim above still reads.
 
-> **The shipped default of 7422 is a bench measurement from one module, not a specification —
-> expect to trim it on yours.** It replaced an earlier default of 3312 from a different module,
-> which needed roughly 2.2x the CV swing per octave that the naive ±6 V-over-4096-counts
-> calculation predicts (28.44 counts/semitone, 7282 in Q8) — evidently the ADC's over-range
-> headroom is not consistent module to module. 7422 lands within 2% of that calculated figure, so
-> this particular module tracks close to the nominal spec; yours may not.
+> **The shipped default of 3372 is a bench measurement, not a specification — expect to trim it
+> on yours.** It is close to (but not identical to) an earlier reading of 3312 from a first
+> module, and well under an intermediate reading of 7422 that a second bench pass produced —
+> roughly double, which is exactly what a one-octave-vs-two-octave measurement slip produces. If
+> your own trim comes out looking like double or half of a number you expected, that ratio is the
+> tell; re-measure the two-point trim below rather than trust it.
 
 **Why the constant is stored so finely.** Pitch error accumulates with distance from the
 calibration point, so a coarse constant is not a small error at the far end of the keyboard. In
