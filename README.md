@@ -298,11 +298,25 @@ HALF SIN, BELL, VOX, STEPS.
 
 ## TRIG — what fires what
 
-A pin grid, not a switch: three trigger sources (**PU2**, the Workshop **SW**itch, a mapped GBA
-**BTN**) against four channels. Tick any combination.
+A pin grid, not a switch: six trigger sources against four channels. Tick any combination.
+
+| Column | Source |
+|---|---|
+| `PU2` | Pulse In 2 |
+| `SW` | the Workshop switch, held down |
+| `BTN` | a GBA button, mapped on the BTN page |
+| `A1` / `A2` | Audio In 1 / Audio In 2 |
+| `V1` | CV In 1 |
 
 Channel 1 can fire from the switch *and* Pulse In 2 while channel 2 fires from the switch only.
 A channel wired to nothing is deliberately silent, and HOLD does not override that.
+
+**`A1`, `A2` and `V1` are off by default on every channel, the factory patch included.** They
+fire on a rising level crossing — loud audio, a gate or a trigger pulse all count, a slowly
+drifting CV does not — and hold the gate open for as long as the signal stays high, exactly as
+`PU2` does. Their threshold is fixed and independent of the DRUM page's adjustable one, so
+tuning drum sensitivity never changes what an armed column here does. The same jack can drive a
+drum voice and a TRIG column at once; they are separate readings of one input, not a conflict.
 
 ## ENV — per-channel ADSR
 
